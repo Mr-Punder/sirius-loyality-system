@@ -56,10 +56,17 @@ func NewAdminBot(config Config, storage storage.Storage, logger logger.Logger) (
 	// Загружаем список администраторов
 	if err := adminBot.loadAdmins(); err != nil {
 		logger.Errorf("Ошибка загрузки списка администраторов: %v", err)
-		// Создаем пустой список, если файл не существует
+		// Создаем пустой список
 		adminBot.admins = AdminsList{
-			Admins: []int64{config.AdminUserID}, // Добавляем ID из конфигурации
+			Admins: []int64{},
 		}
+
+		// Если указан ID администратора в конфигурации, добавляем его
+		if config.AdminUserID != 0 {
+			adminBot.admins.Admins = append(adminBot.admins.Admins, config.AdminUserID)
+			logger.Infof("Добавлен администратор с ID %d из параметров запуска", config.AdminUserID)
+		}
+
 		// Сохраняем список администраторов
 		if err := adminBot.saveAdmins(); err != nil {
 			logger.Errorf("Ошибка сохранения списка администраторов: %v", err)

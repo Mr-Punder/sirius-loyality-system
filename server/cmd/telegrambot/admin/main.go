@@ -26,7 +26,7 @@ func main() {
 	flag.StringVar(&configPath, "c", "cmd/loyalityserver/config.yaml", "config path")
 	flag.StringVar(&token, "token", "", "telegram bot token")
 	flag.StringVar(&serverURL, "server", "http://localhost:8080", "server URL")
-	flag.StringVar(&adminIDStr, "admin", "", "admin user ID")
+	flag.StringVar(&adminIDStr, "admin", "", "admin user ID (используется только при первом запуске, если файл с администраторами не существует)")
 	flag.Parse()
 
 	// Загружаем конфигурацию
@@ -68,24 +68,20 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Проверяем, указан ли ID администратора
-	if adminIDStr == "" {
-		zapLogger.Error("Не указан ID администратора. Используйте флаг -admin")
-		os.Exit(1)
-	}
-
-	// Парсим ID администратора
-	adminID, err := strconv.ParseInt(adminIDStr, 10, 64)
-	if err != nil {
-		zapLogger.Errorf("Неверный формат ID администратора: %v", err)
-		os.Exit(1)
-	}
-
 	// Создаем конфигурацию бота
 	botConfig := telegrambot.Config{
-		Token:       token,
-		AdminUserID: adminID,
-		ServerURL:   serverURL,
+		Token:     token,
+		ServerURL: serverURL,
+	}
+
+	// Если указан ID администратора, добавляем его в конфигурацию
+	if adminIDStr != "" {
+		adminID, err := strconv.ParseInt(adminIDStr, 10, 64)
+		if err != nil {
+			zapLogger.Errorf("Неверный формат ID администратора: %v", err)
+			os.Exit(1)
+		}
+		botConfig.AdminUserID = adminID
 	}
 
 	// Создаем бота
