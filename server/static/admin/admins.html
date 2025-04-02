@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Управление администраторами | Система лояльности</title>
+    <link rel="stylesheet" href="css/styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js" defer></script>
+</head>
+
+<body x-data="adminsApp()">
+    <header>
+        <h1>Система лояльности</h1>
+        <nav>
+            <ul>
+                <li><a href="users.html">Пользователи</a></li>
+                <li><a href="codes.html">QR-коды</a></li>
+                <li><a href="admins.html" class="active">Администраторы</a></li>
+                <li><a href="#" @click.prevent="logout">Выход</a></li>
+            </ul>
+        </nav>
+    </header>
+
+    <main>
+        <section class="admins-section">
+            <h2>Управление администраторами Telegram-бота</h2>
+
+            <div class="add-admin-form">
+                <h3>Добавить нового администратора</h3>
+                <form @submit.prevent="addAdmin">
+                    <div class="form-group">
+                        <label for="adminId">ID пользователя в Telegram:</label>
+                        <input type="text" id="adminId" x-model="newAdminId" placeholder="Например: 123456789" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="adminName">Имя (для заметок):</label>
+                        <input type="text" id="adminName" x-model="newAdminName" placeholder="Например: Иван Иванов">
+                    </div>
+                    <button type="submit" class="btn-primary">Добавить администратора</button>
+                </form>
+            </div>
+
+            <div class="admins-list">
+                <h3>Список администраторов</h3>
+                <div x-show="loading" class="loading">Загрузка...</div>
+                <div x-show="error" class="error" x-text="error"></div>
+
+                <template x-if="!loading && !error">
+                    <div>
+                        <table x-show="admins.length > 0">
+                            <thead>
+                                <tr>
+                                    <th>№</th>
+                                    <th>ID в Telegram</th>
+                                    <th>Имя</th>
+                                    <th>Действия</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <template x-for="(admin, index) in admins" :key="index">
+                                    <tr>
+                                        <td x-text="index + 1"></td>
+                                        <td x-text="admin.id"></td>
+                                        <td x-text="admin.name || '-'"></td>
+                                        <td>
+                                            <button @click="removeAdmin(admin.id)" class="btn-danger">Удалить</button>
+                                        </td>
+                                    </tr>
+                                </template>
+                            </tbody>
+                        </table>
+                        <div x-show="admins.length === 0" class="no-data">
+                            Нет добавленных администраторов
+                        </div>
+                    </div>
+                </template>
+            </div>
+        </section>
+    </main>
+
+    <footer>
+        <p>&copy; 2025 Система лояльности</p>
+    </footer>
+
+    <script>
+        function adminsApp() {
+            return {
+                admins: [],
+                newAdminId: '',
+                newAdminName: '',
+                loading: true,
+                error: null,
+
+                init() {
+                    this.checkAuth();
+                    this.loadAdmins();
+                },
+
+                checkAuth() {
+                    const token = localStorage.getItem('admin_token');
+                    if (!token) {
+                        window.location.href = 'login.html';
+                    }
+                },
+
+                logout() {
+                    localStorage.removeItem('admin_token');
+                    window.location.href = 'login.html';
+                },
+
+                loadAdmins() {
+                    this.loading = true;
+                    this.error = null;
+
+                    fetch('/api/admin/admins', {
+                        headers: {
+                            'Authorization': `Bearer ${localStorage.getItem('admin_token')}`
+                        }
+                    })
+                        .then(response => {
+                            if (!response.ok) {
+                                throw new Error('Ошибка загрузки списка администраторов');
+                            }
+                            return response.json();
+                        })
+                        .then(data => {
+                            this.admins = data.admins;
+                            this.loading = false;
+                        })
+                        .catch(err => {
+                            this.error = err.message;
+                            this.loading = false;
+                        });
+                },
+
+                addAdmin() {
+                    if (!this.newAdminId) return;
+
+                    const adminId = parseInt(this.newAdminId.trim());
+                    if (isNaN(adminId)) {
+                        this.error = 'ID администратора должен быть числом';
+                        return;
+                    }
+
+                    fetch('/api/admin/admins/add', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${localStorage.getItem('admin_token')}`
+                        },
+                        body: JSON.stringify({
+                            id: adminId,
+                            name: this.newAdminName.trim()
+                        })
+                    })
+                        .then(response => {
+                            if (!response.ok) {
+                                throw new Error('Ошибка добавления администратора');
+                            }
+                            return response.json();
+                        })
+                        .then(data => {
+                            this.newAdminId = '';
+                            this.newAdminName = '';
+                            this.loadAdmins();
+                        })
+                        .catch(err => {
+                            this.error = err.message;
+                        });
+                },
+
+                removeAdmin(adminId) {
+                    if (!confirm('Вы уверены, что хотите удалить этого администратора?')) {
+                        return;
+                    }
+
+                    fetch('/api/admin/admins/remove', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${localStorage.getItem('admin_token')}`
+                        },
+                        body: JSON.stringify({
+                            id: adminId
+                        })
+                    })
+                        .then(response => {
+                            if (!response.ok) {
+                                throw new Error('Ошибка удаления администратора');
+                            }
+                            return response.json();
+                        })
+                        .then(data => {
+                            this.loadAdmins();
+                        })
+                        .catch(err => {
+                            this.error = err.message;
+                        });
+                }
+            };
+        }
+    </script>
+</body>
+
+</html>

@@ -1,0 +1,18 @@
+server:
+  runaddress: "127.0.0.1:8080"
+
+logger:
+  level: "info"
+  path: "/Users/goomer125/Documents/sirius-rating-system/server/cmd/loyalityserver/logs/server.log"
+  errorpath: "/Users/goomer125/Documents/sirius-rating-system/server/cmd/loyalityserver/logs/server_error.log"
+  maxsize: 10 # Максимальный размер файла в МБ перед ротацией
+  maxbackups: 5 # Максимальное количество старых файлов логов для хранения
+  maxage: 30 # Максимальное количество дней для хранения старых файлов логов
+  compress: true # Сжимать ротированные файлы логов
+
+storage:
+  type: "file"
+  datapath: "/Users/goomer125/Documents/sirius-rating-system/server/cmd/loyalityserver/data"
+
+admin:
+  jwt_secret: "sirius-rating-system-secret-key-2025"

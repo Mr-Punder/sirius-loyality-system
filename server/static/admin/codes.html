@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Генерация QR-кодов - Админ-панель</title>
+    <link rel="stylesheet" href="css/styles.css">
+    <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.1/build/qrcode.min.js"></script>
+</head>
+
+<body>
+    <div class="container" x-data="codesApp()" x-init="init">
+        <!-- Навигация -->
+        <div class="nav">
+            <a href="users.html" class="nav-item">Пользователи</a>
+            <a href="codes.html" class="nav-item active">Генерация QR-кодов</a>
+            <a href="admins.html" class="nav-item">Администраторы</a>
+            <a href="#" class="nav-item" @click.prevent="logout">Выход</a>
+        </div>
+
+        <!-- Заголовок -->
+        <div class="header">
+            <h1>Генерация QR-кодов</h1>
+        </div>
+
+        <!-- Форма генерации QR-кода -->
+        <div class="code-form">
+            <h2>Создать новый QR-код</h2>
+            <form @submit.prevent="generateCode">
+                <div class="form-group">
+                    <label for="amount">Количество баллов</label>
+                    <input type="number" id="amount" x-model="codeData.amount" min="1" required>
+                </div>
+
+                <div class="form-group">
+                    <label for="per-user">Ограничение на одного пользователя</label>
+                    <input type="number" id="per-user" x-model="codeData.perUser" min="0"
+                        placeholder="0 - без ограничений">
+                </div>
+
+                <div class="form-group">
+                    <label for="total">Общее ограничение использований</label>
+                    <input type="number" id="total" x-model="codeData.total" min="0" placeholder="0 - без ограничений">
+                </div>
+
+                <div class="form-group">
+                    <label for="group">Группа (опционально)</label>
+                    <select id="group" x-model="codeData.group">
+                        <option value="">Без ограничений</option>
+                        <option value="Н1">Н1</option>
+                        <option value="Н2">Н2</option>
+                        <option value="Н3">Н3</option>
+                        <option value="Н4">Н4</option>
+                        <option value="Н5">Н5</option>
+                        <option value="Н6">Н6</option>
+                    </select>
+                </div>
+
+                <div class="error-message" x-show="error" x-text="error"></div>
+
+                <button type="submit" :disabled="loading">
+                    <span x-show="!loading">Сгенерировать</span>
+                    <span x-show="loading">Загрузка...</span>
+                </button>
+            </form>
+        </div>
+
+        <!-- Результат генерации QR-кода -->
+        <div class="code-result" x-show="generatedCode">
+            <h2>QR-код сгенерирован</h2>
+
+            <div class="code-value">
+                <strong>Код:</strong> <span x-text="generatedCode.code"></span>
+            </div>
+
+            <div class="code-details">
+                <p><strong>Баллы:</strong> <span x-text="generatedCode.amount"></span></p>
+                <p><strong>Ограничение на пользователя:</strong> <span
+                        x-text="generatedCode.perUser || 'Без ограничений'"></span></p>
+                <p><strong>Общее ограничение:</strong> <span x-text="generatedCode.total || 'Без ограничений'"></span>
+                </p>
+                <p><strong>Группа:</strong> <span x-text="generatedCode.group || 'Все группы'"></span></p>
+            </div>
+
+            <div class="qr-code">
+                <canvas id="qrcode"></canvas>
+            </div>
+
+            <button @click="printQRCode" class="button">Распечатать QR-код</button>
+        </div>
+
+        <!-- Список существующих QR-кодов -->
+        <div class="header" style="margin-top: 2rem;">
+            <h2>Существующие QR-коды</h2>
+            <div class="actions">
+                <button @click="fetchCodes">Обновить</button>
+            </div>
+        </div>
+
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Код</th>
+                        <th>Баллы</th>
+                        <th>Ограничение на пользователя</th>
+                        <th>Общее ограничение</th>
+                        <th>Использовано</th>
+                        <th>Группа</th>
+                        <th>Статус</th>
+                        <th>Действия</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <template x-if="loadingCodes">
+                        <tr>
+                            <td colspan="8" style="text-align: center;">Загрузка...</td>
+                        </tr>
+                    </template>
+                    <template x-if="!loadingCodes && codes.length === 0">
+                        <tr>
+                            <td colspan="8" style="text-align: center;">Нет QR-кодов</td>
+                        </tr>
+                    </template>
+                    <template x-for="code in codes" :key="code.code">
+                        <tr>
+                            <td x-text="code.code"></td>
+                            <td x-text="code.amount"></td>
+                            <td x-text="code.perUser || 'Без ограничений'"></td>
+                            <td x-text="code.total || 'Без ограничений'"></td>
+                            <td x-text="code.appliedCount"></td>
+                            <td x-text="code.group || 'Все группы'"></td>
+                            <td x-text="code.isActive ? 'Активен' : 'Неактивен'"></td>
+                            <td>
+                                <button @click="showQRCode(code)" class="small-button">Преобразовать в QR</button>
+                            </td>
+                        </tr>
+                    </template>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        function codesApp() {
+            return {
+                codeData: {
+                    amount: 100,
+                    perUser: 0,
+                    total: 0,
+                    group: ''
+                },
+                generatedCode: null,
+                codes: [],
+                loading: false,
+                loadingCodes: true,
+                error: null,
+
+                init() {
+                    // Проверяем токен
+                    this.checkAuth();
+
+                    // Загружаем существующие QR-коды
+                    this.fetchCodes();
+                },
+
+                checkAuth() {
+                    const token = localStorage.getItem('admin_token');
+                    const expires = localStorage.getItem('token_expires');
+
+                    if (!token || !expires || new Date(expires) < new Date()) {
+                        // Токен отсутствует или истек
+                        this.logout();
+                    }
+                },
+
+                logout() {
+                    localStorage.removeItem('admin_token');
+                    localStorage.removeItem('token_expires');
+                    window.location.href = '/admin/login.html';
+                },
+
+                generateCode() {
+                    this.loading = true;
+                    this.error = null;
+
+                    // Получаем токен из localStorage
+                    const token = localStorage.getItem('admin_token');
+
+                    fetch('/api/admin/codes/generate', {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': `Bearer ${token}`,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            amount: parseInt(this.codeData.amount),
+                            per_user: parseInt(this.codeData.perUser) || 0,
+                            total: parseInt(this.codeData.total) || 0,
+                            group: this.codeData.group
+                        })
+                    })
+                        .then(response => {
+                            if (!response.ok) {
+                                if (response.status === 401) {
+                                    // Неавторизован
+                                    this.logout();
+                                    throw new Error('Требуется авторизация');
+                                }
+                                throw new Error('Ошибка генерации QR-кода');
+                            }
+                            return response.json();
+                        })
+                        .then(data => {
+                            this.generatedCode = data;
+
+                            // Добавляем новый код в список
+                            this.codes.unshift(data);
+
+                            // Генерируем QR-код
+                            this.$nextTick(() => {
+                                QRCode.toCanvas(
+                                    document.getElementById('qrcode'),
+                                    data.code,
+                                    {
+                                        width: 300,
+                                        margin: 2,
+                                        color: {
+                                            dark: '#000000',
+                                            light: '#ffffff'
+                                        }
+                                    },
+                                    error => {
+                                        if (error) {
+                                            console.error('Ошибка генерации QR-кода:', error);
+                                        }
+                                    }
+                                );
+                            });
+                        })
+                        .catch(error => {
+                            this.error = error.message;
+                        })
+                        .finally(() => {
+                            this.loading = false;
+                        });
+                },
+
+                fetchCodes() {
+                    this.loadingCodes = true;
+
+                    // Получаем токен из localStorage
+                    const token = localStorage.getItem('admin_token');
+
+                    fetch('/api/admin/codes', {
+                        headers: {
+                            'Authorization': `Bearer ${token}`
+                        }
+                    })
+                        .then(response => {
+                            if (!response.ok) {
+                                if (response.status === 401) {
+                                    // Неавторизован
+                                    this.logout();
+                                    throw new Error('Требуется авторизация');
+                                }
+                                throw new Error('Ошибка загрузки QR-кодов');
+                            }
+                            return response.json();
+                        })
+                        .then(data => {
+                            this.codes = data.codes;
+                        })
+                        .catch(error => {
+                            this.error = error.message;
+                        })
+                        .finally(() => {
+                            this.loadingCodes = false;
+                        });
+                },
+
+                showQRCode(code) {
+                    // Устанавливаем выбранный код как текущий сгенерированный
+                    this.generatedCode = code;
+
+                    // Генерируем QR-код
+                    this.$nextTick(() => {
+                        QRCode.toCanvas(
+                            document.getElementById('qrcode'),
+                            code.code,
+                            {
+                                width: 300,
+                                margin: 2,
+                                color: {
+                                    dark: '#000000',
+                                    light: '#ffffff'
+                                }
+                            },
+                            error => {
+                                if (error) {
+                                    console.error('Ошибка генерации QR-кода:', error);
+                                }
+                            }
+                        );
+
+                        // Прокручиваем страницу к QR-коду
+                        document.querySelector('.code-result').scrollIntoView({ behavior: 'smooth' });
+                    });
+                },
+
+                printQRCode() {
+                    const printWindow = window.open('', '_blank');
+
+                    printWindow.document.write(`
+                        <html>
+                            <head>
+                                <title>QR-код</title>
+                                <style>
+                                    body {
+                                        font-family: Arial, sans-serif;
+                                        text-align: center;
+                                        padding: 20px;
+                                    }
+                                    .qr-container {
+                                        margin: 0 auto;
+                                        max-width: 400px;
+                                    }
+                                    .code-details {
+                                        margin-top: 20px;
+                                        text-align: left;
+                                    }
+                                    @media print {
+                                        .no-print {
+                                            display: none;
+                                        }
+                                    }
+                                </style>
+                            </head>
+                            <body>
+                                <div class="qr-container">
+                                    <h2>QR-код для начисления баллов</h2>
+                                    <img src="${document.getElementById('qrcode').toDataURL()}" alt="QR-код">
+                                    <div class="code-details">
+                                        <p><strong>Код:</strong> ${this.generatedCode.code}</p>
+                                        <p><strong>Баллы:</strong> ${this.generatedCode.amount}</p>
+                                        <p><strong>Ограничение на пользователя:</strong> ${this.generatedCode.perUser || 'Без ограничений'}</p>
+                                        <p><strong>Общее ограничение:</strong> ${this.generatedCode.total || 'Без ограничений'}</p>
+                                        <p><strong>Группа:</strong> ${this.generatedCode.group || 'Все группы'}</p>
+                                    </div>
+                                </div>
+                                <div class="no-print" style="margin-top: 20px;">
+                                    <button onclick="window.print()">Печать</button>
+                                </div>
+                            </body>
+                        </html>
+                    `);
+
+                    printWindow.document.close();
+                }
+            };
+        }
+    </script>
+</body>
+
+</html>

@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Вход в админ-панель</title>
+    <link rel="stylesheet" href="css/styles.css">
+    <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+</head>
+
+<body>
+    <div class="login-container" x-data="loginApp()">
+        <div class="login-box">
+            <h1>Вход в админ-панель</h1>
+            <form @submit.prevent="login">
+                <div class="form-group">
+                    <label for="password">Пароль</label>
+                    <input type="password" id="password" x-model="password" required>
+                </div>
+                <div class="error-message" x-show="error" x-text="error"></div>
+                <button type="submit" :disabled="loading">
+                    <span x-show="!loading">Войти</span>
+                    <span x-show="loading">Загрузка...</span>
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        function loginApp() {
+            return {
+                password: '',
+                error: '',
+                loading: false,
+
+                login() {
+                    this.error = '';
+                    this.loading = true;
+
+                    fetch('/api/admin/login', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            password: this.password
+                        })
+                    })
+                        .then(response => {
+                            if (!response.ok) {
+                                throw new Error('Неверный пароль');
+                            }
+                            return response.json();
+                        })
+                        .then(data => {
+                            // Сохраняем токен в localStorage
+                            localStorage.setItem('admin_token', data.token);
+                            localStorage.setItem('token_expires', data.expires_at);
+
+                            // Перенаправляем на страницу пользователей
+                            window.location.href = '/admin/users.html';
+                        })
+                        .catch(error => {
+                            this.error = error.message;
+                        })
+                        .finally(() => {
+                            this.loading = false;
+                        });
+                }
+            };
+        }
+    </script>
+</body>
+
+</html>

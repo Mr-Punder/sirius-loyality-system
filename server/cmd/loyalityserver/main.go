@@ -6,11 +6,13 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/MrPunder/sirius-loyality-system/internal/admin"
 	"github.com/MrPunder/sirius-loyality-system/internal/config"
 	"github.com/MrPunder/sirius-loyality-system/internal/handlers"
 	"github.com/MrPunder/sirius-loyality-system/internal/logger"
 	"github.com/MrPunder/sirius-loyality-system/internal/loyalityserver"
 	"github.com/MrPunder/sirius-loyality-system/internal/middleware"
+	"github.com/MrPunder/sirius-loyality-system/internal/storage"
 )
 
 func main() {
@@ -28,9 +30,38 @@ func main() {
 	log.Infof("Env values: %s", env)
 	log.Infof("Config parametrs: %s", *conf)
 
-	router := handlers.NewRouter(log)
+	// Инициализация хранилища
+	var store storage.Storage
+	var storeErr error
+
+	switch conf.Storage.Type {
+	case "file":
+		log.Info("Initializing file storage")
+		store, storeErr = storage.NewFilestorage(conf.Storage.DataPath)
+	default:
+		log.Info("Initializing memory storage")
+		store = storage.NewMemstorage()
+	}
+
+	if storeErr != nil {
+		log.Errorf("Failed to initialize storage: %v", storeErr)
+		panic(storeErr)
+	}
+
+	log.Info("Storage initialized successfully")
+
+	// Инициализация обработчиков API
+	router := handlers.NewRouter(log, store)
+
+	// Инициализация обработчиков админки
+	adminHandler := admin.NewAdminHandler(store, log, conf.Storage.DataPath, conf.Admin.JWTSecret)
+	adminHandler.RegisterRoutes(router)
+	log.Info("Admin handlers initialized")
+
+	// Инициализация сервера
 	lsserver := loyalityserver.NewLoyalityServer(conf.Server.RunAddress, router, log)
 
+	// Инициализация middleware
 	comp := middleware.NewGzipCompressor(log)
 	log.Info("Initialized compressor")
 

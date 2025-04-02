@@ -25,6 +25,12 @@ func (c *GzipCompressor) CompressHandler(next http.Handler) http.Handler {
 		c.log.Info("Entered compressor")
 		ow := w
 
+		// Пропускаем сжатие для статических файлов админки
+		if strings.HasPrefix(r.URL.Path, "/admin/") {
+			next.ServeHTTP(w, r)
+			return
+		}
+
 		headers := r.Header
 		c.log.Info(fmt.Sprintf("Headers:  %v", headers))
 

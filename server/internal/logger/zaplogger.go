@@ -6,6 +6,7 @@ import (
 	"github.com/MrPunder/sirius-loyality-system/internal/config"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+	"gopkg.in/natefinch/lumberjack.v2"
 )
 
 type zapLogger struct {
@@ -17,23 +18,48 @@ func NewZapLogger(conf *config.Config) (*zapLogger, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Настройка энкодера
 	encoderConfig := zap.NewDevelopmentEncoderConfig()
 	encoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
 	encoderConfig.EncodeCaller = zapcore.ShortCallerEncoder
-	logConf := zap.Config{
-		Level:             logLevel,
-		Development:       true,
-		Encoding:          "console",
-		EncoderConfig:     encoderConfig,
-		OutputPaths:       []string{conf.Log.Path},
-		ErrorOutputPaths:  []string{conf.Log.ErrorPath},
-		DisableStacktrace: true,
+	encoder := zapcore.NewConsoleEncoder(encoderConfig)
+
+	// Настройка ротации логов для обычных логов
+	stdLogWriter := &lumberjack.Logger{
+		Filename:   conf.Log.Path,
+		MaxSize:    conf.Log.MaxSize,    // Максимальный размер в МБ
+		MaxBackups: conf.Log.MaxBackups, // Максимальное количество файлов бэкапа
+		MaxAge:     conf.Log.MaxAge,     // Максимальный возраст в днях
+		Compress:   conf.Log.Compress,   // Сжимать ротированные файлы
 	}
 
-	logger, err := logConf.Build()
-	if err != nil {
-		return nil, err
+	// Настройка ротации логов для ошибок
+	errLogWriter := &lumberjack.Logger{
+		Filename:   conf.Log.ErrorPath,
+		MaxSize:    conf.Log.MaxSize,
+		MaxBackups: conf.Log.MaxBackups,
+		MaxAge:     conf.Log.MaxAge,
+		Compress:   conf.Log.Compress,
 	}
+
+	// Создание ядра логгера
+	stdCore := zapcore.NewCore(
+		encoder,
+		zapcore.AddSync(stdLogWriter),
+		logLevel,
+	)
+
+	errCore := zapcore.NewCore(
+		encoder,
+		zapcore.AddSync(errLogWriter),
+		zap.ErrorLevel,
+	)
+
+	// Объединение ядер
+	core := zapcore.NewTee(stdCore, errCore)
+
+	// Создание логгера
+	logger := zap.New(core, zap.Development(), zap.AddCaller(), zap.AddCallerSkip(1))
 	defer logger.Sync()
 
 	return &zapLogger{logger.Sugar()}, nil
