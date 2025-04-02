@@ -17,12 +17,15 @@
 
 ```bash
 cd server
-go run cmd/telegrambot/user/main.go -token YOUR_BOT_TOKEN
+go run cmd/telegrambot/user/main.go
 ```
+
+Перед запуском необходимо поместить токен бота в файл `cmd/telegrambot/user/token.txt`.
 
 Параметры запуска:
 
-- `-token` - токен бота, полученный от @BotFather (обязательный)
+- `-token-file` - путь к файлу с токеном бота (по умолчанию cmd/telegrambot/user/token.txt)
+- `-token` - токен бота, полученный от @BotFather (устаревший способ, используйте файл token.txt)
 - `-server` - URL сервера API (по умолчанию <http://localhost:8080>)
 - `-c` - путь к конфигурационному файлу (по умолчанию cmd/loyalityserver/config.yaml)
 
@@ -49,12 +52,15 @@ go run cmd/telegrambot/user/main.go -token YOUR_BOT_TOKEN
 
 ```bash
 cd server
-go run cmd/telegrambot/admin/main.go -token YOUR_BOT_TOKEN
+go run cmd/telegrambot/admin/main.go
 ```
+
+Перед запуском необходимо поместить токен бота в файл `cmd/telegrambot/admin/token.txt`.
 
 Параметры запуска:
 
-- `-token` - токен бота, полученный от @BotFather (обязательный)
+- `-token-file` - путь к файлу с токеном бота (по умолчанию cmd/telegrambot/admin/token.txt)
+- `-token` - токен бота, полученный от @BotFather (устаревший способ, используйте файл token.txt)
 - `-admin` - ID администратора в Telegram (необязательный, используется только при первом запуске, если файл с администраторами не существует)
 - `-server` - URL сервера API (по умолчанию <http://localhost:8080>)
 - `-c` - путь к конфигурационному файлу (по умолчанию cmd/loyalityserver/config.yaml)
@@ -75,7 +81,10 @@ go run cmd/telegrambot/admin/main.go -token YOUR_BOT_TOKEN
 1. Откройте Telegram и найдите @BotFather
 2. Отправьте команду `/newbot`
 3. Следуйте инструкциям для создания нового бота
-4. После создания бота вы получите токен, который нужно использовать при запуске
+4. После создания бота вы получите токен
+5. Сохраните токен в файл:
+   - Для пользовательского бота: `cmd/telegrambot/user/token.txt`
+   - Для административного бота: `cmd/telegrambot/admin/token.txt`
 
 ## Получение ID пользователя в Telegram
 

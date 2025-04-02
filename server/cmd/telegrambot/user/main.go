@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/MrPunder/sirius-loyality-system/internal/config"
@@ -19,12 +20,23 @@ func main() {
 		configPath string
 		token      string
 		serverURL  string
+		tokenPath  string
 	)
 
 	flag.StringVar(&configPath, "c", "cmd/loyalityserver/config.yaml", "config path")
-	flag.StringVar(&token, "token", "", "telegram bot token")
+	flag.StringVar(&token, "token", "", "telegram bot token (deprecated, use token.txt file instead)")
 	flag.StringVar(&serverURL, "server", "http://localhost:8080", "server URL")
+	flag.StringVar(&tokenPath, "token-file", "cmd/telegrambot/user/token.txt", "path to file with telegram bot token")
 	flag.Parse()
+
+	// Если токен не указан через флаг, пытаемся прочитать его из файла
+	if token == "" {
+		tokenData, err := os.ReadFile(tokenPath)
+		if err != nil {
+			log.Fatalf("Ошибка чтения токена из файла: %v", err)
+		}
+		token = strings.TrimSpace(string(tokenData))
+	}
 
 	// Загружаем конфигурацию
 	conf, err := config.LoadConfig()
@@ -61,7 +73,7 @@ func main() {
 
 	// Проверяем, указан ли токен
 	if token == "" {
-		zapLogger.Error("Не указан токен бота. Используйте флаг -token")
+		zapLogger.Error("Не указан токен бота. Используйте файл token.txt или флаг -token")
 		os.Exit(1)
 	}
 
