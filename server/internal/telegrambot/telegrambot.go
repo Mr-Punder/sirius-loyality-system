@@ -17,6 +17,7 @@ type Config struct {
 	Token       string // Токен бота
 	AdminUserID int64  // ID администратора
 	ServerURL   string // URL сервера для API-запросов
+	APIToken    string // Токен для API-запросов
 }
 
 // Bot представляет интерфейс для Telegram-бота

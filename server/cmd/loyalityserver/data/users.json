@@ -1,5 +1,16 @@
 [
   {
+    "id": "e3403d81-4826-4cdb-a757-19d3b4be4f0a",
+    "telegramm": "test_user2",
+    "first_name": "dfg",
+    "last_name": "User2",
+    "middle_name": "dgdg",
+    "points": 123,
+    "group": "Test Group",
+    "registration_time": "2025-04-02T18:12:45.766771+03:00",
+    "deleted": false
+  },
+  {
     "id": "8aedd865-83c6-47c0-ba8f-91ebce29cf6f",
     "telegramm": "test_user",
     "first_name": "Updated",
@@ -11,14 +22,14 @@
     "deleted": false
   },
   {
-    "id": "e3403d81-4826-4cdb-a757-19d3b4be4f0a",
-    "telegramm": "test_user2",
-    "first_name": "dfg",
-    "last_name": "User2",
-    "middle_name": "dgdg",
-    "points": 123,
-    "group": "Test Group",
-    "registration_time": "2025-04-02T18:12:45.766771+03:00",
+    "id": "638531e9-c565-4ad0-bb82-3d4dd86d3dd9",
+    "telegramm": "949159792",
+    "first_name": "Тест1",
+    "last_name": "тест2",
+    "middle_name": "",
+    "points": 111,
+    "group": "Н2",
+    "registration_time": "2025-04-02T21:28:31.838924+03:00",
     "deleted": false
   }
 ]

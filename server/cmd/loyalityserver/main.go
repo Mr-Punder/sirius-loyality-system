@@ -68,7 +68,14 @@ func main() {
 	hLogger := middleware.NewHTTPLoger(log)
 	log.Info("Initialized middleware functions")
 
-	lsserver.AddMidleware(comp.CompressHandler, hLogger.HTTPLogHandler)
+	// Инициализация middleware для проверки токена API
+	tokenAuth := middleware.NewTokenAuth(middleware.TokenAuthConfig{
+		APIToken: conf.API.Token,
+		Logger:   log,
+	})
+	log.Info("Initialized token auth middleware")
+
+	lsserver.AddMidleware(comp.CompressHandler, hLogger.HTTPLogHandler, tokenAuth.Middleware)
 
 	go lsserver.RunServer()
 
@@ -81,4 +88,8 @@ func main() {
 		log.Errorf("Cann't stop server %s", err)
 	}
 
+	// Закрываем логгер перед завершением программы
+	if err := log.Close(); err != nil {
+		panic(err)
+	}
 }

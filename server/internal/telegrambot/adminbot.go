@@ -15,9 +15,23 @@ import (
 	tele "gopkg.in/telebot.v3"
 )
 
+// AdminInfo представляет информацию об администраторе
+type AdminInfo struct {
+	ID   int64  `json:"id"`
+	Name string `json:"name,omitempty"`
+}
+
 // AdminsList представляет список администраторов
 type AdminsList struct {
-	Admins []int64 `json:"admins"`
+	Admins []AdminInfo `json:"admins"`
+}
+
+// BotState представляет состояние бота для конкретного пользователя
+type BotState struct {
+	State       string            // Текущее состояние
+	Params      map[string]string // Параметры, собранные на предыдущих шагах
+	LastMsgID   int               // ID последнего сообщения бота для возможного редактирования
+	LastMsgText string            // Текст последнего сообщения
 }
 
 // AdminBot представляет бота для администраторов
@@ -28,6 +42,8 @@ type AdminBot struct {
 	config     Config
 	admins     AdminsList
 	adminsPath string
+	states     map[int64]*BotState // Состояния пользователей по их ID
+	apiClient  *APIClient
 }
 
 // NewAdminBot создает нового бота для администраторов
@@ -44,6 +60,9 @@ func NewAdminBot(config Config, storage storage.Storage, logger logger.Logger) (
 		return nil, fmt.Errorf("ошибка создания бота: %w", err)
 	}
 
+	// Создаем API-клиент
+	apiClient := NewAPIClient(config.ServerURL, config.APIToken, logger)
+
 	// Создаем бота
 	adminBot := &AdminBot{
 		bot:        bot,
@@ -51,6 +70,8 @@ func NewAdminBot(config Config, storage storage.Storage, logger logger.Logger) (
 		logger:     logger,
 		config:     config,
 		adminsPath: adminsPath,
+		states:     make(map[int64]*BotState),
+		apiClient:  apiClient,
 	}
 
 	// Загружаем список администраторов
@@ -58,18 +79,20 @@ func NewAdminBot(config Config, storage storage.Storage, logger logger.Logger) (
 		logger.Errorf("Ошибка загрузки списка администраторов: %v", err)
 		// Создаем пустой список
 		adminBot.admins = AdminsList{
-			Admins: []int64{},
+			Admins: []AdminInfo{},
 		}
 
 		// Если указан ID администратора в конфигурации, добавляем его
 		if config.AdminUserID != 0 {
-			adminBot.admins.Admins = append(adminBot.admins.Admins, config.AdminUserID)
+			adminBot.admins.Admins = append(adminBot.admins.Admins, AdminInfo{
+				ID: config.AdminUserID,
+			})
 			logger.Infof("Добавлен администратор с ID %d из параметров запуска", config.AdminUserID)
-		}
 
-		// Сохраняем список администраторов
-		if err := adminBot.saveAdmins(); err != nil {
-			logger.Errorf("Ошибка сохранения списка администраторов: %v", err)
+			// Сохраняем список администраторов только если он был изменен
+			if err := adminBot.saveAdmins(); err != nil {
+				logger.Errorf("Ошибка сохранения списка администраторов: %v", err)
+			}
 		}
 	}
 
@@ -104,10 +127,641 @@ func (ab *AdminBot) Start() error {
 	// Обработчик команды /help
 	ab.bot.Handle("/help", ab.handleHelp)
 
+	// Обработчики кнопок главного меню
+	ab.bot.Handle("👥 Пользователи", ab.handleUsersButton)
+	ab.bot.Handle("🔑 QR-коды", ab.handleCodesButton)
+	ab.bot.Handle("👮 Администраторы", ab.handleAdminsButton)
+	ab.bot.Handle("❓ Помощь", ab.handleHelp)
+
+	// Обработчики кнопок меню пользователей
+	ab.bot.Handle("👥 Все пользователи", ab.handleAllUsersButton)
+	ab.bot.Handle("👨‍👩‍👧‍👦 По группам", ab.handleUsersByGroupButton)
+	ab.bot.Handle("➕ Добавить баллы", ab.handleAddPointsButton)
+
+	// Обработчики кнопок меню QR-кодов
+	ab.bot.Handle("🔑 Список QR-кодов", ab.handleListCodesButton)
+	ab.bot.Handle("➕ Сгенерировать QR-код", ab.handleGenerateCodeButton)
+
+	// Обработчики кнопок меню администраторов
+	ab.bot.Handle("👮 Список администраторов", ab.handleListAdmins)
+	ab.bot.Handle("➕ Добавить администратора", ab.handleAddAdminButton)
+
+	// Обработчик кнопки "Назад"
+	ab.bot.Handle("🔙 Назад", ab.handleBackButton)
+
+	// Обработчики кнопок для ввода параметров
+	ab.bot.Handle("🚫 Без ограничений", ab.handleNoLimitsButton)
+	ab.bot.Handle("Н1", ab.handleGroupButton)
+	ab.bot.Handle("Н2", ab.handleGroupButton)
+	ab.bot.Handle("Н3", ab.handleGroupButton)
+	ab.bot.Handle("Н4", ab.handleGroupButton)
+	ab.bot.Handle("Н5", ab.handleGroupButton)
+	ab.bot.Handle("Н6", ab.handleGroupButton)
+	ab.bot.Handle("❌ Отмена", ab.handleCancelButton)
+
+	// Обработчик текстовых сообщений
+	ab.bot.Handle(tele.OnText, ab.handleText)
+
 	// Запуск бота
 	go ab.bot.Start()
 
 	return nil
+}
+
+// handleText обрабатывает текстовые сообщения
+func (ab *AdminBot) handleText(c tele.Context) error {
+	// Проверяем, является ли пользователь администратором
+	if !ab.isAdmin(c.Sender().ID) {
+		return c.Send("У вас нет доступа к этому боту.")
+	}
+
+	// Получаем текст сообщения
+	text := c.Text()
+	userID := c.Sender().ID
+
+	// Проверяем, есть ли у пользователя активное состояние
+	state, ok := ab.states[userID]
+	if !ok {
+		// Если нет активного состояния, отправляем справку
+		keyboard := ab.createMainKeyboard()
+		return c.Send("Используйте кнопки для навигации или /help для просмотра доступных команд.", keyboard)
+	}
+
+	// Обрабатываем сообщение в зависимости от текущего состояния
+	switch state.State {
+	case "generate_code_amount":
+		// Пользователь вводит количество баллов для QR-кода
+		_, err := strconv.Atoi(text)
+		if err != nil {
+			return c.Send("Неверный формат количества баллов. Пожалуйста, введите целое число.")
+		}
+
+		// Сохраняем количество баллов
+		state.Params["amount"] = text
+
+		// Переходим к следующему шагу - ввод ограничения на пользователя
+		state.State = "generate_code_per_user"
+
+		// Создаем клавиатуру с кнопкой "Без ограничений"
+		keyboard := &tele.ReplyMarkup{ResizeKeyboard: true}
+		btnNoLimits := keyboard.Text("🚫 Без ограничений")
+		btnCancel := keyboard.Text("❌ Отмена")
+		keyboard.Reply(
+			keyboard.Row(btnNoLimits),
+			keyboard.Row(btnCancel),
+		)
+
+		// Отправляем сообщение с запросом ограничения на пользователя
+		return c.Send("Введите максимальное количество использований одним пользователем или нажмите кнопку 'Без ограничений':", keyboard)
+
+	case "generate_code_per_user":
+		// Пользователь вводит ограничение на пользователя
+		_, err := strconv.Atoi(text)
+		if err != nil {
+			return c.Send("Неверный формат ограничения. Пожалуйста, введите целое число.")
+		}
+
+		// Сохраняем ограничение на пользователя
+		state.Params["per_user"] = text
+
+		// Переходим к следующему шагу - ввод общего ограничения
+		state.State = "generate_code_total"
+
+		// Создаем клавиатуру с кнопкой "Без ограничений"
+		keyboard := &tele.ReplyMarkup{ResizeKeyboard: true}
+		btnNoLimits := keyboard.Text("🚫 Без ограничений")
+		btnCancel := keyboard.Text("❌ Отмена")
+		keyboard.Reply(
+			keyboard.Row(btnNoLimits),
+			keyboard.Row(btnCancel),
+		)
+
+		// Отправляем сообщение с запросом общего ограничения
+		return c.Send("Введите общее количество использований или нажмите кнопку 'Без ограничений':", keyboard)
+
+	case "generate_code_total":
+		// Пользователь вводит общее ограничение
+		_, err := strconv.Atoi(text)
+		if err != nil {
+			return c.Send("Неверный формат ограничения. Пожалуйста, введите целое число.")
+		}
+
+		// Сохраняем общее ограничение
+		state.Params["total"] = text
+
+		// Переходим к следующему шагу - ввод группы
+		state.State = "generate_code_group"
+
+		// Создаем клавиатуру с кнопками групп
+		keyboard := &tele.ReplyMarkup{ResizeKeyboard: true}
+		btnN1 := keyboard.Text("Н1")
+		btnN2 := keyboard.Text("Н2")
+		btnN3 := keyboard.Text("Н3")
+		btnN4 := keyboard.Text("Н4")
+		btnN5 := keyboard.Text("Н5")
+		btnN6 := keyboard.Text("Н6")
+		btnNoLimits := keyboard.Text("🚫 Без ограничений")
+		btnCancel := keyboard.Text("❌ Отмена")
+		keyboard.Reply(
+			keyboard.Row(btnN1, btnN2, btnN3),
+			keyboard.Row(btnN4, btnN5, btnN6),
+			keyboard.Row(btnNoLimits),
+			keyboard.Row(btnCancel),
+		)
+
+		// Отправляем сообщение с запросом группы
+		return c.Send("Выберите группу или нажмите кнопку 'Без ограничений':", keyboard)
+
+	case "generate_code_group":
+		// Пользователь вводит группу
+		// Проверяем, соответствует ли группа формату
+		if !GroupRegex.MatchString(text) {
+			return c.Send("Неверный формат группы. Группа должна быть от Н1 до Н6 (или H1 до H6).")
+		}
+
+		// Нормализуем группу
+		normalizedGroup, _ := NormalizeGroupName(text)
+
+		// Сохраняем группу
+		state.Params["group"] = normalizedGroup
+
+		// Генерируем QR-код
+		return ab.generateCodeFromParams(c, state.Params)
+
+	case "add_admin_id":
+		// Пользователь вводит ID администратора
+		_, err := strconv.ParseInt(text, 10, 64)
+		if err != nil {
+			return c.Send("Неверный формат ID пользователя. Пожалуйста, введите целое число.")
+		}
+
+		// Сохраняем ID администратора
+		state.Params["admin_id"] = text
+
+		// Переходим к следующему шагу - ввод имени администратора
+		state.State = "add_admin_name"
+
+		// Создаем клавиатуру с кнопкой "Без имени"
+		keyboard := &tele.ReplyMarkup{ResizeKeyboard: true}
+		btnNoName := keyboard.Text("🚫 Без имени")
+		btnCancel := keyboard.Text("❌ Отмена")
+		keyboard.Reply(
+			keyboard.Row(btnNoName),
+			keyboard.Row(btnCancel),
+		)
+
+		// Отправляем сообщение с запросом имени администратора
+		return c.Send("Введите имя администратора (для заметок) или нажмите кнопку 'Без имени':", keyboard)
+
+	case "add_admin_name":
+		// Пользователь вводит имя администратора
+		// Сохраняем имя администратора
+		state.Params["admin_name"] = text
+
+		// Добавляем администратора
+		return ab.addAdminFromParams(c, state.Params)
+
+	case "user_by_group":
+		// Пользователь вводит группу для фильтрации пользователей
+		// Проверяем, соответствует ли группа формату
+		if !GroupRegex.MatchString(text) {
+			return c.Send("Неверный формат группы. Группа должна быть от Н1 до Н6 (или H1 до H6).")
+		}
+
+		// Нормализуем группу
+		normalizedGroup, _ := NormalizeGroupName(text)
+
+		// Вызываем обработчик команды /users с параметром группы
+		c.Message().Payload = normalizedGroup
+		return ab.handleUsers(c)
+
+	case "add_points_user_id":
+		// Пользователь вводит ID пользователя
+		_, err := uuid.Parse(text)
+		if err != nil {
+			return c.Send("Неверный формат ID пользователя. Пожалуйста, введите UUID.")
+		}
+
+		// Сохраняем ID пользователя
+		state.Params["user_id"] = text
+
+		// Переходим к следующему шагу - ввод количества баллов
+		state.State = "add_points_amount"
+
+		// Отправляем сообщение с запросом количества баллов
+		return c.Send("Введите количество баллов для добавления:")
+
+	case "add_points_amount":
+		// Пользователь вводит количество баллов
+		_, err := strconv.Atoi(text)
+		if err != nil {
+			return c.Send("Неверный формат количества баллов. Пожалуйста, введите целое число.")
+		}
+
+		// Сохраняем количество баллов
+		state.Params["points"] = text
+
+		// Добавляем баллы пользователю
+		c.Message().Payload = state.Params["user_id"] + " " + state.Params["points"]
+		return ab.handleAddPoints(c)
+
+	default:
+		// Неизвестное состояние, сбрасываем его
+		delete(ab.states, userID)
+		keyboard := ab.createMainKeyboard()
+		return c.Send("Используйте кнопки для навигации или /help для просмотра доступных команд.", keyboard)
+	}
+}
+
+// handleNoLimitsButton обрабатывает нажатие на кнопку "Без ограничений"
+func (ab *AdminBot) handleNoLimitsButton(c tele.Context) error {
+	// Проверяем, является ли пользователь администратором
+	if !ab.isAdmin(c.Sender().ID) {
+		return c.Send("У вас нет доступа к этой функции.")
+	}
+
+	// Получаем ID пользователя
+	userID := c.Sender().ID
+
+	// Проверяем, есть ли у пользователя активное состояние
+	state, ok := ab.states[userID]
+	if !ok {
+		// Если нет активного состояния, отправляем справку
+		keyboard := ab.createMainKeyboard()
+		return c.Send("Используйте кнопки для навигации или /help для просмотра доступных команд.", keyboard)
+	}
+
+	// Обрабатываем нажатие в зависимости от текущего состояния
+	switch state.State {
+	case "generate_code_per_user":
+		// Пользователь выбрал "Без ограничений" для ограничения на пользователя
+		// Устанавливаем значение 0 (без ограничений)
+		state.Params["per_user"] = "0"
+
+		// Переходим к следующему шагу - ввод общего ограничения
+		state.State = "generate_code_total"
+
+		// Создаем клавиатуру с кнопкой "Без ограничений"
+		keyboard := &tele.ReplyMarkup{ResizeKeyboard: true}
+		btnNoLimits := keyboard.Text("🚫 Без ограничений")
+		btnCancel := keyboard.Text("❌ Отмена")
+		keyboard.Reply(
+			keyboard.Row(btnNoLimits),
+			keyboard.Row(btnCancel),
+		)
+
+		// Отправляем сообщение с запросом общего ограничения
+		return c.Send("Введите общее количество использований или нажмите кнопку 'Без ограничений':", keyboard)
+
+	case "generate_code_total":
+		// Пользователь выбрал "Без ограничений" для общего ограничения
+		// Устанавливаем значение 0 (без ограничений)
+		state.Params["total"] = "0"
+
+		// Переходим к следующему шагу - ввод группы
+		state.State = "generate_code_group"
+
+		// Создаем клавиатуру с кнопками групп
+		keyboard := &tele.ReplyMarkup{ResizeKeyboard: true}
+		btnN1 := keyboard.Text("Н1")
+		btnN2 := keyboard.Text("Н2")
+		btnN3 := keyboard.Text("Н3")
+		btnN4 := keyboard.Text("Н4")
+		btnN5 := keyboard.Text("Н5")
+		btnN6 := keyboard.Text("Н6")
+		btnNoLimits := keyboard.Text("🚫 Без ограничений")
+		btnCancel := keyboard.Text("❌ Отмена")
+		keyboard.Reply(
+			keyboard.Row(btnN1, btnN2, btnN3),
+			keyboard.Row(btnN4, btnN5, btnN6),
+			keyboard.Row(btnNoLimits),
+			keyboard.Row(btnCancel),
+		)
+
+		// Отправляем сообщение с запросом группы
+		return c.Send("Выберите группу или нажмите кнопку 'Без ограничений':", keyboard)
+
+	case "generate_code_group":
+		// Пользователь выбрал "Без ограничений" для группы
+		// Устанавливаем пустую строку (без ограничений по группе)
+		state.Params["group"] = ""
+
+		// Генерируем QR-код
+		return ab.generateCodeFromParams(c, state.Params)
+
+	case "add_admin_name":
+		// Пользователь выбрал "Без имени" для имени администратора
+		// Устанавливаем пустую строку (без имени)
+		state.Params["admin_name"] = ""
+
+		// Добавляем администратора
+		return ab.addAdminFromParams(c, state.Params)
+
+	default:
+		// Неизвестное состояние, сбрасываем его
+		delete(ab.states, userID)
+		keyboard := ab.createMainKeyboard()
+		return c.Send("Используйте кнопки для навигации или /help для просмотра доступных команд.", keyboard)
+	}
+}
+
+// handleGroupButton обрабатывает нажатие на кнопку группы
+func (ab *AdminBot) handleGroupButton(c tele.Context) error {
+	// Проверяем, является ли пользователь администратором
+	if !ab.isAdmin(c.Sender().ID) {
+		return c.Send("У вас нет доступа к этой функции.")
+	}
+
+	// Получаем ID пользователя
+	userID := c.Sender().ID
+
+	// Проверяем, есть ли у пользователя активное состояние
+	state, ok := ab.states[userID]
+	if !ok || state.State != "generate_code_group" {
+		// Если нет активного состояния или состояние не соответствует, отправляем справку
+		keyboard := ab.createMainKeyboard()
+		return c.Send("Используйте кнопки для навигации или /help для просмотра доступных команд.", keyboard)
+	}
+
+	// Получаем выбранную группу
+	group := c.Text()
+
+	// Нормализуем группу
+	normalizedGroup, valid := NormalizeGroupName(group)
+	if !valid {
+		return c.Send("Неверный формат группы. Группа должна быть от Н1 до Н6 (или H1 до H6).")
+	}
+
+	// Сохраняем группу
+	state.Params["group"] = normalizedGroup
+
+	// Генерируем QR-код
+	return ab.generateCodeFromParams(c, state.Params)
+}
+
+// handleCancelButton обрабатывает нажатие на кнопку "Отмена"
+func (ab *AdminBot) handleCancelButton(c tele.Context) error {
+	// Проверяем, является ли пользователь администратором
+	if !ab.isAdmin(c.Sender().ID) {
+		return c.Send("У вас нет доступа к этой функции.")
+	}
+
+	// Получаем ID пользователя
+	userID := c.Sender().ID
+
+	// Сбрасываем состояние пользователя
+	delete(ab.states, userID)
+
+	// Создаем основную клавиатуру
+	keyboard := ab.createMainKeyboard()
+
+	// Отправляем сообщение с клавиатурой
+	return c.Send("Операция отменена. Выберите действие:", keyboard)
+}
+
+// generateCodeFromParams генерирует QR-код из параметров
+func (ab *AdminBot) generateCodeFromParams(c tele.Context, params map[string]string) error {
+	// Парсим параметры
+	amount, err := strconv.Atoi(params["amount"])
+	if err != nil {
+		return c.Send("Неверный формат количества баллов.")
+	}
+
+	perUser, err := strconv.Atoi(params["per_user"])
+	if err != nil {
+		return c.Send("Неверный формат ограничения на пользователя.")
+	}
+
+	total, err := strconv.Atoi(params["total"])
+	if err != nil {
+		return c.Send("Неверный формат общего ограничения.")
+	}
+
+	group := params["group"]
+
+	// Создаем новый код
+	code := &models.Code{
+		Code:         uuid.New(),
+		Amount:       amount,
+		PerUser:      perUser,
+		Total:        total,
+		AppliedCount: 0,
+		IsActive:     true,
+		Group:        group,
+		ErrorCode:    models.ErrorCodeNone,
+	}
+
+	// Добавляем код в хранилище
+	if err := ab.storage.AddCode(code); err != nil {
+		ab.logger.Errorf("Ошибка добавления кода: %v", err)
+		return c.Send("Произошла ошибка при генерации QR-кода. Пожалуйста, попробуйте позже.")
+	}
+
+	// Формируем сообщение с информацией о коде
+	message := fmt.Sprintf("QR-код успешно сгенерирован!\n\n"+
+		"Код: %s\n"+
+		"Баллы: %d\n"+
+		"Ограничение на пользователя: %d\n"+
+		"Общее ограничение: %d\n"+
+		"Группа: %s\n\n"+
+		"Пользователи могут применить этот код, отправив его текстом боту.",
+		code.Code, code.Amount, code.PerUser, code.Total, code.Group)
+
+	// Сбрасываем состояние пользователя
+	delete(ab.states, c.Sender().ID)
+
+	// Создаем основную клавиатуру
+	keyboard := ab.createMainKeyboard()
+
+	// Отправляем сообщение с информацией о коде
+	return c.Send(message, keyboard)
+}
+
+// addAdminFromParams добавляет администратора из параметров
+func (ab *AdminBot) addAdminFromParams(c tele.Context, params map[string]string) error {
+	// Парсим ID администратора
+	adminID, err := strconv.ParseInt(params["admin_id"], 10, 64)
+	if err != nil {
+		return c.Send("Неверный формат ID пользователя.")
+	}
+
+	// Получаем имя администратора
+	adminName := params["admin_name"]
+
+	// Проверяем, есть ли уже такой администратор
+	for _, admin := range ab.admins.Admins {
+		if admin.ID == adminID {
+			return c.Send(fmt.Sprintf("Пользователь с ID %d уже является администратором.", adminID))
+		}
+	}
+
+	// Добавляем нового администратора
+	ab.admins.Admins = append(ab.admins.Admins, AdminInfo{
+		ID:   adminID,
+		Name: adminName,
+	})
+
+	// Сохраняем список администраторов
+	if err := ab.saveAdmins(); err != nil {
+		ab.logger.Errorf("Ошибка сохранения списка администраторов: %v", err)
+		return c.Send("Произошла ошибка при сохранении списка администраторов.")
+	}
+
+	// Сбрасываем состояние пользователя
+	delete(ab.states, c.Sender().ID)
+
+	// Создаем основную клавиатуру
+	keyboard := ab.createMainKeyboard()
+
+	// Отправляем сообщение об успешном добавлении
+	return c.Send(fmt.Sprintf("Пользователь с ID %d успешно добавлен в список администраторов.", adminID), keyboard)
+}
+
+// Используем NormalizeGroupName из utils.go
+
+// handleUsersButton обрабатывает нажатие на кнопку "Пользователи"
+func (ab *AdminBot) handleUsersButton(c tele.Context) error {
+	ab.logger.Infof("Пользователь %d нажал на кнопку 'Пользователи'", c.Sender().ID)
+
+	// Проверяем, является ли пользователь администратором
+	if !ab.isAdmin(c.Sender().ID) {
+		return c.Send("У вас нет доступа к этой функции.")
+	}
+
+	// Создаем клавиатуру для работы с пользователями
+	keyboard := ab.createUsersKeyboard()
+
+	// Отправляем сообщение с клавиатурой
+	return c.Send("Выберите действие для работы с пользователями:", keyboard)
+}
+
+// handleCodesButton обрабатывает нажатие на кнопку "QR-коды"
+func (ab *AdminBot) handleCodesButton(c tele.Context) error {
+	ab.logger.Infof("Пользователь %d нажал на кнопку 'QR-коды'", c.Sender().ID)
+
+	// Проверяем, является ли пользователь администратором
+	if !ab.isAdmin(c.Sender().ID) {
+		return c.Send("У вас нет доступа к этой функции.")
+	}
+
+	// Создаем клавиатуру для работы с QR-кодами
+	keyboard := ab.createCodesKeyboard()
+
+	// Отправляем сообщение с клавиатурой
+	return c.Send("Выберите действие для работы с QR-кодами:", keyboard)
+}
+
+// handleAdminsButton обрабатывает нажатие на кнопку "Администраторы"
+func (ab *AdminBot) handleAdminsButton(c tele.Context) error {
+	ab.logger.Infof("Пользователь %d нажал на кнопку 'Администраторы'", c.Sender().ID)
+
+	// Проверяем, является ли пользователь администратором
+	if !ab.isAdmin(c.Sender().ID) {
+		return c.Send("У вас нет доступа к этой функции.")
+	}
+
+	// Создаем клавиатуру для работы с администраторами
+	keyboard := ab.createAdminsKeyboard()
+
+	// Отправляем сообщение с клавиатурой
+	return c.Send("Выберите действие для работы с администраторами:", keyboard)
+}
+
+// handleAllUsersButton обрабатывает нажатие на кнопку "Все пользователи"
+func (ab *AdminBot) handleAllUsersButton(c tele.Context) error {
+	ab.logger.Infof("Пользователь %d нажал на кнопку 'Все пользователи'", c.Sender().ID)
+
+	// Вызываем обработчик команды /users без параметров
+	return ab.handleUsers(c)
+}
+
+// handleUsersByGroupButton обрабатывает нажатие на кнопку "По группам"
+func (ab *AdminBot) handleUsersByGroupButton(c tele.Context) error {
+	ab.logger.Infof("Пользователь %d нажал на кнопку 'По группам'", c.Sender().ID)
+
+	// Проверяем, является ли пользователь администратором
+	if !ab.isAdmin(c.Sender().ID) {
+		return c.Send("У вас нет доступа к этой функции.")
+	}
+
+	// Отправляем сообщение с запросом группы
+	return c.Send("Введите название группы (например, Н1):")
+}
+
+// handleAddPointsButton обрабатывает нажатие на кнопку "Добавить баллы"
+func (ab *AdminBot) handleAddPointsButton(c tele.Context) error {
+	ab.logger.Infof("Пользователь %d нажал на кнопку 'Добавить баллы'", c.Sender().ID)
+
+	// Проверяем, является ли пользователь администратором
+	if !ab.isAdmin(c.Sender().ID) {
+		return c.Send("У вас нет доступа к этой функции.")
+	}
+
+	// Инициализируем состояние для добавления баллов
+	userID := c.Sender().ID
+	ab.states[userID] = &BotState{
+		State:  "add_points_user_id",
+		Params: make(map[string]string),
+	}
+
+	// Отправляем сообщение с запросом ID пользователя
+	return c.Send("Введите ID пользователя (UUID):")
+}
+
+// handleGenerateCodeButton обрабатывает нажатие на кнопку "Сгенерировать QR-код"
+func (ab *AdminBot) handleGenerateCodeButton(c tele.Context) error {
+	ab.logger.Infof("Пользователь %d нажал на кнопку 'Сгенерировать QR-код'", c.Sender().ID)
+
+	// Проверяем, является ли пользователь администратором
+	if !ab.isAdmin(c.Sender().ID) {
+		return c.Send("У вас нет доступа к этой функции.")
+	}
+
+	// Инициализируем состояние для генерации QR-кода
+	userID := c.Sender().ID
+	ab.states[userID] = &BotState{
+		State:  "generate_code_amount",
+		Params: make(map[string]string),
+	}
+
+	// Отправляем сообщение с запросом количества баллов
+	return c.Send("Введите количество баллов для QR-кода:")
+}
+
+// handleAddAdminButton обрабатывает нажатие на кнопку "Добавить администратора"
+func (ab *AdminBot) handleAddAdminButton(c tele.Context) error {
+	ab.logger.Infof("Пользователь %d нажал на кнопку 'Добавить администратора'", c.Sender().ID)
+
+	// Проверяем, является ли пользователь администратором
+	if !ab.isAdmin(c.Sender().ID) {
+		return c.Send("У вас нет доступа к этой функции.")
+	}
+
+	// Инициализируем состояние для добавления администратора
+	userID := c.Sender().ID
+	ab.states[userID] = &BotState{
+		State:  "add_admin_id",
+		Params: make(map[string]string),
+	}
+
+	// Отправляем сообщение с запросом ID администратора
+	return c.Send("Введите ID пользователя:")
+}
+
+// handleBackButton обрабатывает нажатие на кнопку "Назад"
+func (ab *AdminBot) handleBackButton(c tele.Context) error {
+	ab.logger.Infof("Пользователь %d нажал на кнопку 'Назад'", c.Sender().ID)
+
+	// Проверяем, является ли пользователь администратором
+	if !ab.isAdmin(c.Sender().ID) {
+		return c.Send("У вас нет доступа к этой функции.")
+	}
+
+	// Создаем основную клавиатуру
+	keyboard := ab.createMainKeyboard()
+
+	// Отправляем сообщение с клавиатурой
+	return c.Send("Главное меню:", keyboard)
 }
 
 // Stop останавливает бота
@@ -121,6 +775,23 @@ func (ab *AdminBot) Stop() error {
 func (ab *AdminBot) loadAdmins() error {
 	// Проверяем, существует ли файл
 	if _, err := os.Stat(ab.adminsPath); os.IsNotExist(err) {
+		// Если файл не существует, но директория существует, создаем пустой файл
+		dir := filepath.Dir(ab.adminsPath)
+		if _, err := os.Stat(dir); err == nil {
+			// Создаем пустой список администраторов
+			emptyAdmins := AdminsList{
+				Admins: []AdminInfo{},
+			}
+			data, err := json.MarshalIndent(emptyAdmins, "", "    ")
+			if err != nil {
+				return err
+			}
+			if err := os.WriteFile(ab.adminsPath, data, 0644); err != nil {
+				return err
+			}
+			ab.admins = emptyAdmins
+			return nil
+		}
 		return err
 	}
 
@@ -163,13 +834,90 @@ func (ab *AdminBot) saveAdmins() error {
 // isAdmin проверяет, является ли пользователь администратором
 func (ab *AdminBot) isAdmin(userID int64) bool {
 	// Проверяем, есть ли пользователь в списке администраторов
-	for _, adminID := range ab.admins.Admins {
-		if userID == adminID {
+	for _, admin := range ab.admins.Admins {
+		if userID == admin.ID {
 			return true
 		}
 	}
 
 	return false
+}
+
+// createMainKeyboard создает основную клавиатуру с кнопками
+func (ab *AdminBot) createMainKeyboard() *tele.ReplyMarkup {
+	keyboard := &tele.ReplyMarkup{ResizeKeyboard: true}
+
+	// Создаем кнопки
+	btnUsers := keyboard.Text("👥 Пользователи")
+	btnCodes := keyboard.Text("🔑 QR-коды")
+	btnAdmins := keyboard.Text("👮 Администраторы")
+	btnHelp := keyboard.Text("❓ Помощь")
+
+	// Добавляем кнопки на клавиатуру
+	keyboard.Reply(
+		keyboard.Row(btnUsers, btnCodes),
+		keyboard.Row(btnAdmins, btnHelp),
+	)
+
+	return keyboard
+}
+
+// createUsersKeyboard создает клавиатуру для работы с пользователями
+func (ab *AdminBot) createUsersKeyboard() *tele.ReplyMarkup {
+	keyboard := &tele.ReplyMarkup{ResizeKeyboard: true}
+
+	// Создаем кнопки
+	btnAllUsers := keyboard.Text("👥 Все пользователи")
+	btnUsersByGroup := keyboard.Text("👨‍👩‍👧‍👦 По группам")
+	btnAddPoints := keyboard.Text("➕ Добавить баллы")
+	btnBack := keyboard.Text("🔙 Назад")
+
+	// Добавляем кнопки на клавиатуру
+	keyboard.Reply(
+		keyboard.Row(btnAllUsers, btnUsersByGroup),
+		keyboard.Row(btnAddPoints),
+		keyboard.Row(btnBack),
+	)
+
+	return keyboard
+}
+
+// createCodesKeyboard создает клавиатуру для работы с QR-кодами
+func (ab *AdminBot) createCodesKeyboard() *tele.ReplyMarkup {
+	keyboard := &tele.ReplyMarkup{ResizeKeyboard: true}
+
+	// Создаем кнопки
+	btnListCodes := keyboard.Text("🔑 Список QR-кодов")
+	btnGenerateCode := keyboard.Text("➕ Сгенерировать QR-код")
+	btnBack := keyboard.Text("🔙 Назад")
+
+	// Добавляем кнопки на клавиатуру
+	keyboard.Reply(
+		keyboard.Row(btnListCodes),
+		keyboard.Row(btnGenerateCode),
+		keyboard.Row(btnBack),
+	)
+
+	return keyboard
+}
+
+// createAdminsKeyboard создает клавиатуру для работы с администраторами
+func (ab *AdminBot) createAdminsKeyboard() *tele.ReplyMarkup {
+	keyboard := &tele.ReplyMarkup{ResizeKeyboard: true}
+
+	// Создаем кнопки
+	btnListAdmins := keyboard.Text("👮 Список администраторов")
+	btnAddAdmin := keyboard.Text("➕ Добавить администратора")
+	btnBack := keyboard.Text("🔙 Назад")
+
+	// Добавляем кнопки на клавиатуру
+	keyboard.Reply(
+		keyboard.Row(btnListAdmins),
+		keyboard.Row(btnAddAdmin),
+		keyboard.Row(btnBack),
+	)
+
+	return keyboard
 }
 
 // handleStart обрабатывает команду /start
@@ -181,8 +929,11 @@ func (ab *AdminBot) handleStart(c tele.Context) error {
 		return c.Send("У вас нет доступа к этому боту.")
 	}
 
-	// Отправляем приветственное сообщение
-	return c.Send("Привет, администратор! Я бот для управления системой лояльности. Используй /help для просмотра доступных команд.")
+	// Создаем клавиатуру
+	keyboard := ab.createMainKeyboard()
+
+	// Отправляем приветственное сообщение с клавиатурой
+	return c.Send("Привет, администратор! Я бот для управления системой лояльности. Выберите действие на клавиатуре или используйте /help для просмотра доступных команд.", keyboard)
 }
 
 // handleUsers обрабатывает команду /users
@@ -451,15 +1202,24 @@ func (ab *AdminBot) handleAddAdmin(c tele.Context) error {
 		return c.Send("Неверный формат ID пользователя. Используйте целое число.")
 	}
 
+	// Получаем имя администратора (если указано)
+	var adminName string
+	if len(args) > 1 {
+		adminName = strings.Join(args[1:], " ")
+	}
+
 	// Проверяем, есть ли уже такой администратор
-	for _, id := range ab.admins.Admins {
-		if id == adminID {
+	for _, admin := range ab.admins.Admins {
+		if admin.ID == adminID {
 			return c.Send(fmt.Sprintf("Пользователь с ID %d уже является администратором.", adminID))
 		}
 	}
 
 	// Добавляем нового администратора
-	ab.admins.Admins = append(ab.admins.Admins, adminID)
+	ab.admins.Admins = append(ab.admins.Admins, AdminInfo{
+		ID:   adminID,
+		Name: adminName,
+	})
 
 	// Сохраняем список администраторов
 	if err := ab.saveAdmins(); err != nil {
@@ -484,8 +1244,68 @@ func (ab *AdminBot) handleListAdmins(c tele.Context) error {
 	var message strings.Builder
 	message.WriteString("Список администраторов:\n\n")
 
-	for i, adminID := range ab.admins.Admins {
-		message.WriteString(fmt.Sprintf("%d. %d\n", i+1, adminID))
+	for i, admin := range ab.admins.Admins {
+		if admin.Name != "" {
+			message.WriteString(fmt.Sprintf("%d. %d (%s)\n", i+1, admin.ID, admin.Name))
+		} else {
+			message.WriteString(fmt.Sprintf("%d. %d\n", i+1, admin.ID))
+		}
+	}
+
+	// Отправляем сообщение
+	return c.Send(message.String())
+}
+
+// handleListCodesButton обрабатывает нажатие на кнопку "Список QR-кодов"
+func (ab *AdminBot) handleListCodesButton(c tele.Context) error {
+	ab.logger.Infof("Пользователь %d нажал на кнопку 'Список QR-кодов'", c.Sender().ID)
+
+	// Проверяем, является ли пользователь администратором
+	if !ab.isAdmin(c.Sender().ID) {
+		return c.Send("У вас нет доступа к этой функции.")
+	}
+
+	// Получаем все коды
+	codes, err := ab.storage.GetAllCodes()
+	if err != nil {
+		ab.logger.Errorf("Ошибка получения кодов: %v", err)
+		return c.Send("Произошла ошибка при получении списка QR-кодов. Пожалуйста, попробуйте позже.")
+	}
+
+	// Фильтруем только активные коды
+	var activeCodes []*models.Code
+	for _, code := range codes {
+		if code.IsActive {
+			activeCodes = append(activeCodes, code)
+		}
+	}
+
+	if len(activeCodes) == 0 {
+		return c.Send("Активные QR-коды не найдены.")
+	}
+
+	// Формируем сообщение со списком кодов
+	var message strings.Builder
+	message.WriteString("Список активных QR-кодов:\n\n")
+
+	for i, code := range activeCodes {
+		groupInfo := "без ограничений"
+		if code.Group != "" {
+			groupInfo = code.Group
+		}
+
+		perUserInfo := "без ограничений"
+		if code.PerUser > 0 {
+			perUserInfo = fmt.Sprintf("%d", code.PerUser)
+		}
+
+		totalInfo := "без ограничений"
+		if code.Total > 0 {
+			totalInfo = fmt.Sprintf("%d", code.Total)
+		}
+
+		message.WriteString(fmt.Sprintf("%d. Код: %s\n   Баллы: %d\n   Использовано: %d\n   Лимит на пользователя: %s\n   Общий лимит: %s\n   Группа: %s\n\n",
+			i+1, code.Code, code.Amount, code.AppliedCount, perUserInfo, totalInfo, groupInfo))
 	}
 
 	// Отправляем сообщение

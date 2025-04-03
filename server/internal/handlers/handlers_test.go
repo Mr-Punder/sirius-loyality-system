@@ -32,6 +32,7 @@ func (m *MockLogger) Fatal(msg string)                                       {}
 func (m *MockLogger) Fatalf(format string, args ...interface{})              {}
 func (m *MockLogger) WithField(key string, value interface{}) logger.Logger  { return m }
 func (m *MockLogger) WithFields(fields map[string]interface{}) logger.Logger { return m }
+func (m *MockLogger) Close() error                                           { return nil }
 
 func setupTest(t *testing.T) (*Handler, *storage.Memstorage) {
 	mockLogger := &MockLogger{}

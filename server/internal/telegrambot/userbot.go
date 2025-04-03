@@ -2,7 +2,6 @@ package telegrambot
 
 import (
 	"fmt"
-	"regexp"
 	"strings"
 
 	"github.com/MrPunder/sirius-loyality-system/internal/logger"
@@ -12,15 +11,13 @@ import (
 	tele "gopkg.in/telebot.v3"
 )
 
-// Регулярное выражение для проверки группы
-var groupRegex = regexp.MustCompile(`^[НHнh][1-6]$`)
-
 // UserBot представляет бота для пользователей
 type UserBot struct {
-	bot     *tele.Bot
-	storage storage.Storage
-	logger  logger.Logger
-	config  Config
+	bot       *tele.Bot
+	storage   storage.Storage
+	logger    logger.Logger
+	config    Config
+	apiClient *APIClient
 }
 
 // NewUserBot создает нового бота для пользователей
@@ -35,11 +32,15 @@ func NewUserBot(config Config, storage storage.Storage, logger logger.Logger) (*
 		return nil, fmt.Errorf("ошибка создания бота: %w", err)
 	}
 
+	// Создаем API-клиент
+	apiClient := NewAPIClient(config.ServerURL, config.APIToken, logger)
+
 	return &UserBot{
-		bot:     bot,
-		storage: storage,
-		logger:  logger,
-		config:  config,
+		bot:       bot,
+		storage:   storage,
+		logger:    logger,
+		config:    config,
+		apiClient: apiClient,
 	}, nil
 }
 
@@ -59,10 +60,71 @@ func (ub *UserBot) Start() error {
 	// Обработчик для QR-кодов
 	ub.bot.Handle(tele.OnText, ub.handleText)
 
+	// Обработчики кнопок
+	ub.bot.Handle("💰 Мои баллы", ub.handlePointsButton)
+	ub.bot.Handle("📷 Сканировать QR-код", ub.handleScanQRButton)
+	ub.bot.Handle("❓ Помощь", ub.handleHelpButton)
+	ub.bot.Handle("📝 Регистрация", ub.handleRegisterButton)
+
 	// Запуск бота
 	go ub.bot.Start()
 
 	return nil
+}
+
+// handlePointsButton обрабатывает нажатие на кнопку "Мои баллы"
+func (ub *UserBot) handlePointsButton(c tele.Context) error {
+	// Просто вызываем обработчик команды /points
+	return ub.handlePoints(c)
+}
+
+// handleScanQRButton обрабатывает нажатие на кнопку "Сканировать QR-код"
+func (ub *UserBot) handleScanQRButton(c tele.Context) error {
+	ub.logger.Infof("Пользователь %d нажал на кнопку 'Сканировать QR-код'", c.Sender().ID)
+
+	// Проверяем, зарегистрирован ли пользователь
+	telegramID := fmt.Sprintf("%d", c.Sender().ID)
+	users, err := ub.storage.GetAllUsers()
+	if err != nil {
+		ub.logger.Errorf("Ошибка получения пользователей: %v", err)
+		return c.Send("Произошла ошибка при проверке регистрации. Пожалуйста, попробуйте позже.")
+	}
+
+	var user *models.User
+	for _, u := range users {
+		if u.Telegramm == telegramID && !u.Deleted {
+			user = u
+			break
+		}
+	}
+
+	if user == nil {
+		// Пользователь не зарегистрирован
+		return c.Send("Ты не зарегистрирован в системе. Используй кнопку 'Регистрация' для регистрации.")
+	}
+
+	// Отправляем сообщение с инструкцией
+	return c.Send("Отправь мне QR-код в виде текста (UUID).")
+}
+
+// handleHelpButton обрабатывает нажатие на кнопку "Помощь"
+func (ub *UserBot) handleHelpButton(c tele.Context) error {
+	ub.logger.Infof("Пользователь %d нажал на кнопку 'Помощь'", c.Sender().ID)
+
+	// Отправляем справку
+	message := "Я бот системы лояльности. Вот что я умею:\n\n" +
+		"- Регистрация в системе\n" +
+		"- Просмотр баллов\n" +
+		"- Сканирование QR-кодов для получения баллов\n\n" +
+		"Используй кнопки внизу экрана для навигации."
+
+	return c.Send(message)
+}
+
+// handleRegisterButton обрабатывает нажатие на кнопку "Регистрация"
+func (ub *UserBot) handleRegisterButton(c tele.Context) error {
+	// Просто вызываем обработчик команды /register
+	return ub.handleRegister(c)
 }
 
 // Stop останавливает бота
@@ -70,6 +132,32 @@ func (ub *UserBot) Stop() error {
 	ub.logger.Info("Остановка пользовательского бота")
 	ub.bot.Stop()
 	return nil
+}
+
+// createMainKeyboard создает основную клавиатуру с кнопками
+func (ub *UserBot) createMainKeyboard(isRegistered bool) *tele.ReplyMarkup {
+	keyboard := &tele.ReplyMarkup{ResizeKeyboard: true}
+
+	// Создаем кнопки
+	btnPoints := keyboard.Text("💰 Мои баллы")
+	btnScanQR := keyboard.Text("📷 Сканировать QR-код")
+	btnHelp := keyboard.Text("❓ Помощь")
+	btnRegister := keyboard.Text("📝 Регистрация")
+
+	// Добавляем кнопки на клавиатуру в зависимости от статуса регистрации
+	if isRegistered {
+		keyboard.Reply(
+			keyboard.Row(btnPoints, btnScanQR),
+			keyboard.Row(btnHelp),
+		)
+	} else {
+		keyboard.Reply(
+			keyboard.Row(btnRegister),
+			keyboard.Row(btnHelp),
+		)
+	}
+
+	return keyboard
 }
 
 // handleStart обрабатывает команду /start
@@ -92,13 +180,22 @@ func (ub *UserBot) handleStart(c tele.Context) error {
 		}
 	}
 
+	// Создаем клавиатуру
+	var keyboard *tele.ReplyMarkup
+	var message string
+
 	if user != nil {
 		// Пользователь уже зарегистрирован
-		return c.Send(fmt.Sprintf("Привет, %s! Ты уже зарегистрирован в системе. Используй /points для просмотра своих баллов.", user.FirstName))
+		keyboard = ub.createMainKeyboard(true)
+		message = fmt.Sprintf("Привет, %s! Ты уже зарегистрирован в системе. Используй кнопки для навигации.", user.FirstName)
+	} else {
+		// Пользователь не зарегистрирован
+		keyboard = ub.createMainKeyboard(false)
+		message = "Привет! Я бот системы лояльности. Для начала работы тебе нужно зарегистрироваться."
 	}
 
-	// Пользователь не зарегистрирован
-	return c.Send("Привет! Я бот системы лояльности. Для регистрации используй команду /register.")
+	// Отправляем сообщение с клавиатурой
+	return c.Send(message, keyboard)
 }
 
 // handleRegister обрабатывает команду /register
@@ -116,7 +213,8 @@ func (ub *UserBot) handleRegister(c tele.Context) error {
 	for _, u := range users {
 		if u.Telegramm == telegramID && !u.Deleted {
 			// Пользователь уже зарегистрирован
-			return c.Send(fmt.Sprintf("Ты уже зарегистрирован в системе как %s %s.", u.FirstName, u.LastName))
+			keyboard := ub.createMainKeyboard(true)
+			return c.Send(fmt.Sprintf("Ты уже зарегистрирован в системе как %s %s.", u.FirstName, u.LastName), keyboard)
 		}
 	}
 
@@ -146,11 +244,13 @@ func (ub *UserBot) handlePoints(c tele.Context) error {
 
 	if user == nil {
 		// Пользователь не зарегистрирован
-		return c.Send("Ты не зарегистрирован в системе. Используй /register для регистрации.")
+		keyboard := ub.createMainKeyboard(false)
+		return c.Send("Ты не зарегистрирован в системе. Используй кнопку 'Регистрация' для регистрации.", keyboard)
 	}
 
 	// Отправляем информацию о баллах
-	return c.Send(fmt.Sprintf("У тебя %d баллов.", user.Points))
+	keyboard := ub.createMainKeyboard(true)
+	return c.Send(fmt.Sprintf("У тебя %d баллов.", user.Points), keyboard)
 }
 
 // handleText обрабатывает текстовые сообщения
@@ -172,7 +272,7 @@ func (ub *UserBot) handleText(c tele.Context) error {
 		groupInput := parts[2]
 
 		// Нормализуем группу
-		normalizedGroup, valid := normalizeGroup(groupInput)
+		normalizedGroup, valid := NormalizeGroupName(groupInput)
 		if !valid {
 			return c.Send("Неверный формат группы. Группа должна быть от Н1 до Н6 (или H1 до H6).")
 		}
@@ -210,12 +310,35 @@ func (ub *UserBot) handleText(c tele.Context) error {
 			return c.Send("Произошла ошибка при регистрации. Пожалуйста, попробуйте позже.")
 		}
 
-		// Отправляем сообщение об успешной регистрации
-		return c.Send(fmt.Sprintf("Ты успешно зарегистрирован как %s %s в группе %s.", firstName, lastName, normalizedGroup))
+		// Отправляем сообщение об успешной регистрации с клавиатурой
+		keyboard := ub.createMainKeyboard(true)
+		return c.Send(fmt.Sprintf("Ты успешно зарегистрирован как %s %s в группе %s.", firstName, lastName, normalizedGroup), keyboard)
 	}
 
 	// Если сообщение не является QR-кодом или данными для регистрации, отправляем справку
-	return c.Send("Я не понимаю это сообщение. Используй /register для регистрации или /points для просмотра баллов.")
+	// Определяем, зарегистрирован ли пользователь
+	users, err := ub.storage.GetAllUsers()
+	if err != nil {
+		ub.logger.Errorf("Ошибка получения пользователей: %v", err)
+		return c.Send("Произошла ошибка. Пожалуйста, попробуйте позже.")
+	}
+
+	var user *models.User
+	for _, u := range users {
+		if u.Telegramm == telegramID && !u.Deleted {
+			user = u
+			break
+		}
+	}
+
+	var keyboard *tele.ReplyMarkup
+	if user != nil {
+		keyboard = ub.createMainKeyboard(true)
+	} else {
+		keyboard = ub.createMainKeyboard(false)
+	}
+
+	return c.Send("Я не понимаю это сообщение. Используй кнопки для навигации.", keyboard)
 }
 
 // handleQRCode обрабатывает QR-код
@@ -314,8 +437,9 @@ func (ub *UserBot) handleQRCode(c tele.Context, code string) error {
 		return c.Send("Произошла ошибка при получении баллов. Пожалуйста, попробуйте позже.")
 	}
 
-	// Отправляем сообщение об успешном применении QR-кода
-	return c.Send(fmt.Sprintf("QR-код успешно применен! Добавлено %d баллов. Теперь у тебя %d баллов.", codeInfo.Amount, points))
+	// Отправляем сообщение об успешном применении QR-кода с клавиатурой
+	keyboard := ub.createMainKeyboard(true)
+	return c.Send(fmt.Sprintf("QR-код успешно применен! Добавлено %d баллов. Теперь у тебя %d баллов.", codeInfo.Amount, points), keyboard)
 }
 
 // isUUID проверяет, является ли строка UUID
@@ -324,15 +448,4 @@ func isUUID(s string) bool {
 	return err == nil
 }
 
-// normalizeGroup нормализует группу (Н1-Н6, H1-H6, н1-н6, h1-h6) -> Н1-Н6
-func normalizeGroup(group string) (string, bool) {
-	if !groupRegex.MatchString(group) {
-		return "", false
-	}
-
-	// Получаем номер группы
-	number := group[len(group)-1]
-
-	// Возвращаем нормализованную группу
-	return fmt.Sprintf("Н%c", number), true
-}
+// Используем NormalizeGroupName из utils.go

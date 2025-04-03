@@ -11,6 +11,7 @@ import (
 
 type zapLogger struct {
 	logZap *zap.SugaredLogger
+	logger *zap.Logger // Сохраняем ссылку на оригинальный логгер для вызова Sync()
 }
 
 func NewZapLogger(conf *config.Config) (*zapLogger, error) {
@@ -60,9 +61,11 @@ func NewZapLogger(conf *config.Config) (*zapLogger, error) {
 
 	// Создание логгера
 	logger := zap.New(core, zap.Development(), zap.AddCaller(), zap.AddCallerSkip(1))
-	defer logger.Sync()
 
-	return &zapLogger{logger.Sugar()}, nil
+	return &zapLogger{
+		logZap: logger.Sugar(),
+		logger: logger,
+	}, nil
 }
 
 // RequestLog makes request log
@@ -103,4 +106,9 @@ func (logger *zapLogger) ResponseLog(status int, size int, duration time.Duratio
 		"size", size,
 		"time", duration.String(),
 	)
+}
+
+// Close закрывает логгер, сбрасывая все буферизованные логи
+func (logger *zapLogger) Close() error {
+	return logger.logger.Sync()
 }

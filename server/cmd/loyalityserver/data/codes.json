@@ -1,5 +1,25 @@
 [
   {
+    "code": "12c9850a-c70b-476c-ba43-a8a2b1e000b2",
+    "amount": 300,
+    "per_user": 2,
+    "total": 5,
+    "applied_count": 1,
+    "is_active": true,
+    "group": "",
+    "error_code": 0
+  },
+  {
+    "code": "5a765e63-8de1-4a50-8801-0fe9b94f3246",
+    "amount": 20,
+    "per_user": 0,
+    "total": 0,
+    "applied_count": 0,
+    "is_active": true,
+    "group": "Н3",
+    "error_code": 0
+  },
+  {
     "code": "bb347f15-c2c2-4673-8282-c6e25df17fab",
     "amount": 100,
     "per_user": 0,
@@ -45,16 +65,6 @@
     "per_user": 3,
     "total": 0,
     "applied_count": 4,
-    "is_active": true,
-    "group": "",
-    "error_code": 0
-  },
-  {
-    "code": "12c9850a-c70b-476c-ba43-a8a2b1e000b2",
-    "amount": 300,
-    "per_user": 2,
-    "total": 5,
-    "applied_count": 1,
     "is_active": true,
     "group": "",
     "error_code": 0

@@ -32,32 +32,39 @@ type AdminConfig struct {
 	JWTSecret string `yaml:"jwt_secret"` // Секретный ключ для JWT-токенов
 }
 
+type APIConfig struct {
+	Token string `yaml:"token"` // Токен для API-запросов
+}
+
 // Config представляет структуру конфигурации
 type Config struct {
 	Server  ServerConfig  `yaml:"server"`
 	Log     LogConfig     `yaml:"logger"`
 	Storage StorageConfig `yaml:"storage"`
 	Admin   AdminConfig   `yaml:"admin"`
+	API     APIConfig     `yaml:"api"`
 }
 
 // LoadConfig загружает конфигурацию из файла YAML и учитывает флаги командной строки
 func LoadConfig() (*Config, error) {
 	// Определение флагов
-	var configPath string
 	var logLevel string
 	var runAddress string
 	var logPath string
 	var storageType string
 	var storageDataPath string
 
-	flag.StringVar(&configPath, "c", "cmd/loyalityserver/config.yaml", "config path")
 	flag.StringVar(&logLevel, "log_level", "", "override log level")
 	flag.StringVar(&runAddress, "run_address", "", "override run address")
 	flag.StringVar(&logPath, "log_path", "", "override log path")
 	flag.StringVar(&storageType, "storage_type", "", "override storage type (file or sqlite)")
 	flag.StringVar(&storageDataPath, "storage_data_path", "", "override storage data path")
 
-	flag.Parse()
+	// Получаем путь к конфигурационному файлу из переменной окружения или используем значение по умолчанию
+	configPath := os.Getenv("CONFIG_PATH")
+	if configPath == "" {
+		configPath = "cmd/loyalityserver/config.yaml"
+	}
 
 	// Чтение файла конфигурации
 	data, err := os.ReadFile(configPath)

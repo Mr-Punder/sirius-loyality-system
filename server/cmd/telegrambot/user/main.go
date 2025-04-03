@@ -17,16 +17,22 @@ import (
 func main() {
 	// Парсим флаги командной строки
 	var (
-		configPath string
-		token      string
-		serverURL  string
-		tokenPath  string
+		token        string
+		serverURL    string
+		tokenPath    string
+		apiToken     string
+		apiTokenPath string
 	)
 
-	flag.StringVar(&configPath, "c", "cmd/loyalityserver/config.yaml", "config path")
 	flag.StringVar(&token, "token", "", "telegram bot token (deprecated, use token.txt file instead)")
 	flag.StringVar(&serverURL, "server", "http://localhost:8080", "server URL")
 	flag.StringVar(&tokenPath, "token-file", "cmd/telegrambot/user/token.txt", "path to file with telegram bot token")
+	flag.StringVar(&apiToken, "api-token", "", "API token for server authentication")
+	flag.StringVar(&apiTokenPath, "api-token-file", "cmd/telegrambot/api_token.txt", "path to file with API token")
+
+	// Устанавливаем переменную окружения для пути к конфигурационному файлу
+	os.Setenv("CONFIG_PATH", "cmd/loyalityserver/config.yaml")
+
 	flag.Parse()
 
 	// Если токен не указан через флаг, пытаемся прочитать его из файла
@@ -36,6 +42,15 @@ func main() {
 			log.Fatalf("Ошибка чтения токена из файла: %v", err)
 		}
 		token = strings.TrimSpace(string(tokenData))
+	}
+
+	// Если API-токен не указан через флаг, пытаемся прочитать его из файла
+	if apiToken == "" {
+		apiTokenData, err := os.ReadFile(apiTokenPath)
+		if err != nil {
+			log.Fatalf("Ошибка чтения API-токена из файла: %v", err)
+		}
+		apiToken = strings.TrimSpace(string(apiTokenData))
 	}
 
 	// Загружаем конфигурацию
@@ -81,6 +96,7 @@ func main() {
 	botConfig := telegrambot.Config{
 		Token:     token,
 		ServerURL: serverURL,
+		APIToken:  apiToken,
 	}
 
 	// Создаем бота
@@ -111,4 +127,9 @@ func main() {
 	}
 
 	zapLogger.Info("Бот остановлен")
+
+	// Закрываем логгер перед завершением программы
+	if err := zapLogger.Close(); err != nil {
+		log.Fatalf("Ошибка закрытия логгера: %v", err)
+	}
 }

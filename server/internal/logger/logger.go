@@ -6,4 +6,5 @@ type Logger interface {
 	Error(mess string)
 	Infof(str string, arg ...any)
 	Debug(mess string)
+	Close() error // Метод для корректного закрытия логгера
 }

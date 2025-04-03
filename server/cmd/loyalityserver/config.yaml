@@ -16,3 +16,6 @@ storage:
 
 admin:
   jwt_secret: "sirius-rating-system-secret-key-2025"
+
+api:
+  token: "sirius-rating-system-api-token-2025"
