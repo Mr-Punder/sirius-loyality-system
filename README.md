@@ -45,6 +45,21 @@
 
 ## API сервера
 
+### Аутентификация API
+
+Все API-запросы (кроме административных) требуют аутентификацию с помощью токена API. Токен должен быть передан в заголовке `Authorization` в формате `Bearer {token}`.
+
+Токен API настраивается в конфигурационном файле `server/cmd/loyalityserver/config.yaml` в секции `api.token`.
+
+Пример:
+
+```
+api:
+  token: "sirius-rating-system-api-token-2025"
+```
+
+Для ботов токен API хранится в файле `server/cmd/telegrambot/api_token.txt`.
+
 ### Пользователи (Users)
 
 #### Для участников

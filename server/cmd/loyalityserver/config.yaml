@@ -11,8 +11,19 @@ logger:
   compress: true # Сжимать ротированные файлы логов
 
 storage:
-  type: "file"
-  datapath: "/Users/goomer125/Documents/sirius-rating-system/server/cmd/loyalityserver/data"
+  # Тип хранилища: "file", "postgres", "sqlite"
+  type: "sqlite"
+
+  # Параметры для file storage
+  # datapath: "/Users/goomer125/Documents/sirius-rating-system/server/cmd/loyalityserver/data"
+
+  # Параметры для PostgreSQL
+  # connection_string: "postgres:///loyality_system?sslmode=disable"
+  # migrations_path: "/Users/goomer125/Documents/sirius-rating-system/server/migrations/postgres"
+
+  # Параметры для SQLite
+  db_path: "/Users/goomer125/Documents/sirius-rating-system/server/cmd/loyalityserver/data/loyality_system.db"
+  migrations_path: "/Users/goomer125/Documents/sirius-rating-system/server/migrations/sqlite"
 
 admin:
   jwt_secret: "sirius-rating-system-secret-key-2025"

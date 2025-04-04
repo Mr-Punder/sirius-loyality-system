@@ -24,8 +24,11 @@ type ServerConfig struct {
 }
 
 type StorageConfig struct {
-	Type     string `yaml:"type"`     // Тип хранилища: "file" или "sqlite" (в будущем)
-	DataPath string `yaml:"datapath"` // Путь к директории для хранения данных
+	Type             string `yaml:"type"`              // Тип хранилища: "file", "postgres", "sqlite"
+	DataPath         string `yaml:"datapath"`          // Путь к директории для хранения данных (для file)
+	ConnectionString string `yaml:"connection_string"` // Строка подключения к PostgreSQL
+	MigrationsPath   string `yaml:"migrations_path"`   // Путь к миграциям PostgreSQL/SQLite
+	DBPath           string `yaml:"db_path"`           // Путь к файлу базы данных SQLite
 }
 
 type AdminConfig struct {

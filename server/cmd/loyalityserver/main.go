@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"github.com/MrPunder/sirius-loyality-system/internal/admin"
@@ -38,6 +39,12 @@ func main() {
 	case "file":
 		log.Info("Initializing file storage")
 		store, storeErr = storage.NewFilestorage(conf.Storage.DataPath)
+	case "postgres":
+		log.Info("Initializing PostgreSQL storage")
+		store, storeErr = storage.NewPgStorage(conf.Storage.ConnectionString, conf.Storage.MigrationsPath)
+	case "sqlite":
+		log.Info("Initializing SQLite storage")
+		store, storeErr = storage.NewSQLiteStorage(conf.Storage.DBPath, conf.Storage.MigrationsPath)
 	default:
 		log.Info("Initializing memory storage")
 		store = storage.NewMemstorage()
@@ -48,22 +55,37 @@ func main() {
 		panic(storeErr)
 	}
 
+	// Закрываем хранилище при завершении работы
+	defer func() {
+		switch s := store.(type) {
+		case *storage.PgStorage:
+			log.Info("Closing PostgreSQL connection")
+			s.Close()
+		case *storage.SQLiteStorage:
+			log.Info("Closing SQLite connection")
+			s.Close()
+		}
+	}()
+
 	log.Info("Storage initialized successfully")
 
 	// Инициализация обработчиков API
 	router := handlers.NewRouter(log, store)
 
 	// Инициализация обработчиков админки
-	adminHandler := admin.NewAdminHandler(store, log, conf.Storage.DataPath, conf.Admin.JWTSecret)
+	var dataPath string
+	if conf.Storage.Type == "sqlite" {
+		// Для SQLite используем директорию, содержащую файл базы данных
+		dataPath = filepath.Dir(conf.Storage.DBPath)
+	} else {
+		dataPath = conf.Storage.DataPath
+	}
+	adminHandler := admin.NewAdminHandler(store, log, dataPath, conf.Admin.JWTSecret)
 	adminHandler.RegisterRoutes(router)
 	log.Info("Admin handlers initialized")
 
 	// Инициализация сервера
 	lsserver := loyalityserver.NewLoyalityServer(conf.Server.RunAddress, router, log)
-
-	// Инициализация middleware
-	comp := middleware.NewGzipCompressor(log)
-	log.Info("Initialized compressor")
 
 	hLogger := middleware.NewHTTPLoger(log)
 	log.Info("Initialized middleware functions")
@@ -75,7 +97,7 @@ func main() {
 	})
 	log.Info("Initialized token auth middleware")
 
-	lsserver.AddMidleware(comp.CompressHandler, hLogger.HTTPLogHandler, tokenAuth.Middleware)
+	lsserver.AddMidleware(hLogger.HTTPLogHandler, tokenAuth.Middleware)
 	// lsserver.AddMidleware(hLogger.HTTPLogHandler, tokenAuth.Middleware)
 
 	go lsserver.RunServer()

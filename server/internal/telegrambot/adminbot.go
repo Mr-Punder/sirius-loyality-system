@@ -358,16 +358,26 @@ func (ab *AdminBot) handleText(c tele.Context) error {
 		// Сбрасываем состояние пользователя
 		delete(ab.states, userID)
 
-		// Получаем всех пользователей
-		users, err := ab.storage.GetAllUsers()
+		// Получаем всех пользователей через API
+		usersData, err := ab.apiClient.Get("/users", nil)
 		if err != nil {
-			ab.logger.Errorf("Ошибка получения пользователей: %v", err)
+			ab.logger.Errorf("Ошибка получения пользователей через API: %v", err)
+			return c.Send("Произошла ошибка при получении пользователей. Пожалуйста, попробуйте позже.")
+		}
+
+		// Декодируем ответ
+		var usersResponse struct {
+			Total int            `json:"total"`
+			Users []*models.User `json:"users"`
+		}
+		if err := json.Unmarshal(usersData, &usersResponse); err != nil {
+			ab.logger.Errorf("Ошибка декодирования ответа API: %v", err)
 			return c.Send("Произошла ошибка при получении пользователей. Пожалуйста, попробуйте позже.")
 		}
 
 		// Фильтруем пользователей по группе и исключаем удаленных
 		var filteredUsers []*models.User
-		for _, user := range users {
+		for _, user := range usersResponse.Users {
 			if user.Group == normalizedGroup && !user.Deleted {
 				filteredUsers = append(filteredUsers, user)
 			}
@@ -566,16 +576,26 @@ func (ab *AdminBot) handleGroupButton(c tele.Context) error {
 		// Сбрасываем состояние пользователя
 		delete(ab.states, userID)
 
-		// Получаем всех пользователей
-		users, err := ab.storage.GetAllUsers()
+		// Получаем всех пользователей через API
+		usersData, err := ab.apiClient.Get("/users", nil)
 		if err != nil {
-			ab.logger.Errorf("Ошибка получения пользователей: %v", err)
+			ab.logger.Errorf("Ошибка получения пользователей через API: %v", err)
+			return c.Send("Произошла ошибка при получении пользователей. Пожалуйста, попробуйте позже.")
+		}
+
+		// Декодируем ответ
+		var usersResponse struct {
+			Total int            `json:"total"`
+			Users []*models.User `json:"users"`
+		}
+		if err := json.Unmarshal(usersData, &usersResponse); err != nil {
+			ab.logger.Errorf("Ошибка декодирования ответа API: %v", err)
 			return c.Send("Произошла ошибка при получении пользователей. Пожалуйста, попробуйте позже.")
 		}
 
 		// Фильтруем пользователей по группе и исключаем удаленных
 		var filteredUsers []*models.User
-		for _, user := range users {
+		for _, user := range usersResponse.Users {
 			if user.Group == normalizedGroup && !user.Deleted {
 				filteredUsers = append(filteredUsers, user)
 			}
@@ -645,21 +665,25 @@ func (ab *AdminBot) generateCodeFromParams(c tele.Context, params map[string]str
 
 	group := params["group"]
 
-	// Создаем новый код
-	code := &models.Code{
-		Code:         uuid.New(),
-		Amount:       amount,
-		PerUser:      perUser,
-		Total:        total,
-		AppliedCount: 0,
-		IsActive:     true,
-		Group:        group,
-		ErrorCode:    models.ErrorCodeNone,
+	// Создаем запрос для API
+	codeRequest := map[string]interface{}{
+		"amount":   amount,
+		"per_user": perUser,
+		"total":    total,
+		"group":    group,
 	}
 
-	// Добавляем код в хранилище
-	if err := ab.storage.AddCode(code); err != nil {
-		ab.logger.Errorf("Ошибка добавления кода: %v", err)
+	// Отправляем запрос на создание кода через API
+	codeData, err := ab.apiClient.Post("/codes", codeRequest)
+	if err != nil {
+		ab.logger.Errorf("Ошибка создания кода через API: %v", err)
+		return c.Send("Произошла ошибка при генерации QR-кода. Пожалуйста, попробуйте позже.")
+	}
+
+	// Декодируем ответ
+	var code models.Code
+	if err := json.Unmarshal(codeData, &code); err != nil {
+		ab.logger.Errorf("Ошибка декодирования ответа API: %v", err)
 		return c.Send("Произошла ошибка при генерации QR-кода. Пожалуйста, попробуйте позже.")
 	}
 
@@ -1112,16 +1136,26 @@ func (ab *AdminBot) handleUsers(c tele.Context) error {
 		ab.logger.Infof("Фильтрация пользователей по группе: %s", group)
 	}
 
-	// Получаем всех пользователей
-	users, err := ab.storage.GetAllUsers()
+	// Получаем всех пользователей через API
+	usersData, err := ab.apiClient.Get("/users", nil)
 	if err != nil {
-		ab.logger.Errorf("Ошибка получения пользователей: %v", err)
+		ab.logger.Errorf("Ошибка получения пользователей через API: %v", err)
+		return c.Send("Произошла ошибка при получении пользователей. Пожалуйста, попробуйте позже.")
+	}
+
+	// Декодируем ответ
+	var usersResponse struct {
+		Total int            `json:"total"`
+		Users []*models.User `json:"users"`
+	}
+	if err := json.Unmarshal(usersData, &usersResponse); err != nil {
+		ab.logger.Errorf("Ошибка декодирования ответа API: %v", err)
 		return c.Send("Произошла ошибка при получении пользователей. Пожалуйста, попробуйте позже.")
 	}
 
 	// Фильтруем пользователей по группе и исключаем удаленных
 	var filteredUsers []*models.User
-	for _, user := range users {
+	for _, user := range usersResponse.Users {
 		if (group == "" || user.Group == group) && !user.Deleted {
 			filteredUsers = append(filteredUsers, user)
 		}
@@ -1172,11 +1206,18 @@ func (ab *AdminBot) handleUser(c tele.Context) error {
 		return c.Send("Неверный формат ID пользователя. Используйте UUID.")
 	}
 
-	// Получаем пользователя
-	user, err := ab.storage.GetUser(userID)
+	// Получаем пользователя через API
+	userData, err := ab.apiClient.Get("/users/"+userID.String(), nil)
 	if err != nil {
-		ab.logger.Errorf("Ошибка получения пользователя: %v", err)
+		ab.logger.Errorf("Ошибка получения пользователя через API: %v", err)
 		return c.Send("Пользователь не найден.")
+	}
+
+	// Декодируем ответ
+	var user models.User
+	if err := json.Unmarshal(userData, &user); err != nil {
+		ab.logger.Errorf("Ошибка декодирования ответа API: %v", err)
+		return c.Send("Произошла ошибка при получении информации о пользователе. Пожалуйста, попробуйте позже.")
 	}
 
 	if user.Deleted {
@@ -1225,41 +1266,50 @@ func (ab *AdminBot) handleAddPoints(c tele.Context) error {
 		return c.Send("Неверный формат количества баллов. Используйте целое число.")
 	}
 
-	// Получаем пользователя
-	user, err := ab.storage.GetUser(userID)
+	// Получаем пользователя через API
+	userData, err := ab.apiClient.Get("/users/"+userID.String(), nil)
 	if err != nil {
-		ab.logger.Errorf("Ошибка получения пользователя: %v", err)
+		ab.logger.Errorf("Ошибка получения пользователя через API: %v", err)
 		return c.Send("Пользователь не найден.")
+	}
+
+	// Декодируем ответ
+	var user models.User
+	if err := json.Unmarshal(userData, &user); err != nil {
+		ab.logger.Errorf("Ошибка декодирования ответа API: %v", err)
+		return c.Send("Произошла ошибка при получении информации о пользователе. Пожалуйста, попробуйте позже.")
 	}
 
 	if user.Deleted {
 		return c.Send("Пользователь удален.")
 	}
 
-	// Создаем транзакцию
-	transaction := &models.Transaction{
-		Id:     uuid.New(),
-		UserId: userID,
-		Diff:   points,
-		Time:   models.GetCurrentTime(),
+	// Создаем запрос для добавления баллов через API
+	transactionRequest := map[string]interface{}{
+		"user_id": userID.String(),
+		"points":  points,
 	}
 
-	// Добавляем транзакцию
-	if err := ab.storage.AddTransaction(transaction); err != nil {
-		ab.logger.Errorf("Ошибка добавления транзакции: %v", err)
+	// Отправляем запрос на добавление баллов через API
+	transactionData, err := ab.apiClient.Post("/transactions", transactionRequest)
+	if err != nil {
+		ab.logger.Errorf("Ошибка добавления баллов через API: %v", err)
 		return c.Send("Произошла ошибка при добавлении баллов. Пожалуйста, попробуйте позже.")
 	}
 
-	// Получаем обновленные баллы пользователя
-	updatedPoints, err := ab.storage.GetUserPoints(userID)
-	if err != nil {
-		ab.logger.Errorf("Ошибка получения баллов пользователя: %v", err)
-		return c.Send("Произошла ошибка при получении баллов. Пожалуйста, попробуйте позже.")
+	// Декодируем ответ
+	var transactionResponse struct {
+		Success     bool `json:"success"`
+		TotalPoints int  `json:"total_points"`
+	}
+	if err := json.Unmarshal(transactionData, &transactionResponse); err != nil {
+		ab.logger.Errorf("Ошибка декодирования ответа API: %v", err)
+		return c.Send("Произошла ошибка при добавлении баллов. Пожалуйста, попробуйте позже.")
 	}
 
 	// Отправляем сообщение об успешном добавлении баллов
 	return c.Send(fmt.Sprintf("Баллы успешно добавлены!\nПользователь: %s %s\nДобавлено: %d\nВсего баллов: %d",
-		user.FirstName, user.LastName, points, updatedPoints))
+		user.FirstName, user.LastName, points, transactionResponse.TotalPoints))
 }
 
 // handleGenerateCode обрабатывает команду /generatecode
@@ -1309,21 +1359,25 @@ func (ab *AdminBot) handleGenerateCode(c tele.Context) error {
 		group = args[3]
 	}
 
-	// Создаем новый код
-	code := &models.Code{
-		Code:         uuid.New(),
-		Amount:       amount,
-		PerUser:      perUser,
-		Total:        total,
-		AppliedCount: 0,
-		IsActive:     true,
-		Group:        group,
-		ErrorCode:    models.ErrorCodeNone,
+	// Создаем запрос для API
+	codeRequest := map[string]interface{}{
+		"amount":   amount,
+		"per_user": perUser,
+		"total":    total,
+		"group":    group,
 	}
 
-	// Добавляем код в хранилище
-	if err := ab.storage.AddCode(code); err != nil {
-		ab.logger.Errorf("Ошибка добавления кода: %v", err)
+	// Отправляем запрос на создание кода через API
+	codeData, err := ab.apiClient.Post("/codes", codeRequest)
+	if err != nil {
+		ab.logger.Errorf("Ошибка создания кода через API: %v", err)
+		return c.Send("Произошла ошибка при генерации QR-кода. Пожалуйста, попробуйте позже.")
+	}
+
+	// Декодируем ответ
+	var code models.Code
+	if err := json.Unmarshal(codeData, &code); err != nil {
+		ab.logger.Errorf("Ошибка декодирования ответа API: %v", err)
 		return c.Send("Произошла ошибка при генерации QR-кода. Пожалуйста, попробуйте позже.")
 	}
 
@@ -1425,16 +1479,26 @@ func (ab *AdminBot) handleListCodesButton(c tele.Context) error {
 		return c.Send("У вас нет доступа к этой функции.")
 	}
 
-	// Получаем все коды
-	codes, err := ab.storage.GetAllCodes()
+	// Получаем все коды через API
+	codesData, err := ab.apiClient.Get("/codes", nil)
 	if err != nil {
-		ab.logger.Errorf("Ошибка получения кодов: %v", err)
+		ab.logger.Errorf("Ошибка получения кодов через API: %v", err)
+		return c.Send("Произошла ошибка при получении списка QR-кодов. Пожалуйста, попробуйте позже.")
+	}
+
+	// Декодируем ответ
+	var codesResponse struct {
+		Total int            `json:"total"`
+		Codes []*models.Code `json:"codes"`
+	}
+	if err := json.Unmarshal(codesData, &codesResponse); err != nil {
+		ab.logger.Errorf("Ошибка декодирования ответа API: %v", err)
 		return c.Send("Произошла ошибка при получении списка QR-кодов. Пожалуйста, попробуйте позже.")
 	}
 
 	// Фильтруем только активные коды
 	var activeCodes []*models.Code
-	for _, code := range codes {
+	for _, code := range codesResponse.Codes {
 		if code.IsActive {
 			activeCodes = append(activeCodes, code)
 		}
@@ -1546,16 +1610,26 @@ func (ab *AdminBot) handleBroadcastText(c tele.Context, state *BotState) error {
 
 // broadcastMessage отправляет сообщение всем пользователям
 func (ab *AdminBot) broadcastMessage(c tele.Context, text string, group string) error {
-	// Получаем всех пользователей
-	users, err := ab.storage.GetAllUsers()
+	// Получаем всех пользователей через API
+	usersData, err := ab.apiClient.Get("/users", nil)
 	if err != nil {
-		ab.logger.Errorf("Ошибка получения пользователей: %v", err)
+		ab.logger.Errorf("Ошибка получения пользователей через API: %v", err)
+		return c.Send("Произошла ошибка при получении пользователей. Пожалуйста, попробуйте позже.")
+	}
+
+	// Декодируем ответ
+	var usersResponse struct {
+		Total int            `json:"total"`
+		Users []*models.User `json:"users"`
+	}
+	if err := json.Unmarshal(usersData, &usersResponse); err != nil {
+		ab.logger.Errorf("Ошибка декодирования ответа API: %v", err)
 		return c.Send("Произошла ошибка при получении пользователей. Пожалуйста, попробуйте позже.")
 	}
 
 	// Фильтруем пользователей по группе и исключаем удаленных
 	var filteredUsers []*models.User
-	for _, user := range users {
+	for _, user := range usersResponse.Users {
 		if (group == "" || user.Group == group) && !user.Deleted {
 			filteredUsers = append(filteredUsers, user)
 		}

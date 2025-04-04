@@ -2,6 +2,7 @@ package telegrambot
 
 import (
 	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -72,8 +73,21 @@ func (c *APIClient) Get(path string, params map[string]string) ([]byte, error) {
 		return nil, fmt.Errorf("ошибка API (%d): %s", resp.StatusCode, string(body))
 	}
 
+	// Проверяем, сжат ли ответ
+	var reader io.ReadCloser
+	switch resp.Header.Get("Content-Encoding") {
+	case "gzip":
+		reader, err = gzip.NewReader(resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("ошибка создания gzip-ридера: %w", err)
+		}
+		defer reader.Close()
+	default:
+		reader = resp.Body
+	}
+
 	// Читаем ответ
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(reader)
 	if err != nil {
 		return nil, fmt.Errorf("ошибка чтения ответа: %w", err)
 	}
@@ -119,8 +133,21 @@ func (c *APIClient) Post(path string, data interface{}) ([]byte, error) {
 		return nil, fmt.Errorf("ошибка API (%d): %s", resp.StatusCode, string(body))
 	}
 
+	// Проверяем, сжат ли ответ
+	var reader io.ReadCloser
+	switch resp.Header.Get("Content-Encoding") {
+	case "gzip":
+		reader, err = gzip.NewReader(resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("ошибка создания gzip-ридера: %w", err)
+		}
+		defer reader.Close()
+	default:
+		reader = resp.Body
+	}
+
 	// Читаем ответ
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(reader)
 	if err != nil {
 		return nil, fmt.Errorf("ошибка чтения ответа: %w", err)
 	}
@@ -159,8 +186,21 @@ func (c *APIClient) Delete(path string) ([]byte, error) {
 		return nil, fmt.Errorf("ошибка API (%d): %s", resp.StatusCode, string(body))
 	}
 
+	// Проверяем, сжат ли ответ
+	var reader io.ReadCloser
+	switch resp.Header.Get("Content-Encoding") {
+	case "gzip":
+		reader, err = gzip.NewReader(resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("ошибка создания gzip-ридера: %w", err)
+		}
+		defer reader.Close()
+	default:
+		reader = resp.Body
+	}
+
 	// Читаем ответ
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(reader)
 	if err != nil {
 		return nil, fmt.Errorf("ошибка чтения ответа: %w", err)
 	}
