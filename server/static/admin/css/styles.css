@@ -52,6 +52,14 @@ button:disabled,
     cursor: not-allowed;
 }
 
+.btn-danger {
+    background-color: #e74c3c;
+}
+
+.btn-danger:hover {
+    background-color: #c0392b;
+}
+
 .small-button {
     padding: 0.25rem 0.5rem;
     font-size: 0.85rem;

@@ -144,6 +144,7 @@ func (ah *AdminHandler) RegisterRoutes(r chi.Router) {
 
 			r.Get("/users", ah.handleUsers)
 			r.Post("/users/update", ah.handleUpdateUser)
+			r.Post("/users/delete", ah.handleDeleteUser)
 			r.Get("/codes", ah.handleCodes)
 			r.Post("/codes/generate", ah.handleGenerateCode)
 			r.Get("/admins", ah.handleGetAdmins)
@@ -754,6 +755,45 @@ func (ah *AdminHandler) handleRemoveAdmin(w http.ResponseWriter, r *http.Request
 	if err := ah.saveAdmins(newAdmins); err != nil {
 		ah.logger.Errorf("Ошибка сохранения списка администраторов: %v", err)
 		http.Error(w, "Внутренняя ошибка сервера", http.StatusInternalServerError)
+		return
+	}
+
+	// Отправляем ответ
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]bool{"success": true})
+}
+
+// handleDeleteUser обрабатывает запрос на удаление пользователя
+func (ah *AdminHandler) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
+	ah.logger.Info("Запрос на удаление пользователя")
+
+	if r.Method != http.MethodPost {
+		http.Error(w, "Метод не поддерживается", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Декодируем запрос
+	var request struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		ah.logger.Errorf("Ошибка декодирования запроса: %v", err)
+		http.Error(w, "Неверный формат запроса", http.StatusBadRequest)
+		return
+	}
+
+	// Парсим UUID пользователя
+	userID, err := uuid.Parse(request.ID)
+	if err != nil {
+		ah.logger.Errorf("Неверный формат ID пользователя: %v", err)
+		http.Error(w, "Неверный формат ID пользователя", http.StatusBadRequest)
+		return
+	}
+
+	// Удаляем пользователя
+	if err := ah.store.DeleteUser(userID); err != nil {
+		ah.logger.Errorf("Ошибка удаления пользователя: %v", err)
+		http.Error(w, "Ошибка удаления пользователя", http.StatusInternalServerError)
 		return
 	}
 

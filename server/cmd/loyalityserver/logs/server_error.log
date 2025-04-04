@@ -8,3 +8,20 @@
 2025-04-04T15:50:50.875+0300	[31mERROR[0m	middleware/token_auth.go:40	Попытка доступа без токена: GET /favicon.ico
 2025-04-04T15:50:54.438+0300	[31mERROR[0m	middleware/token_auth.go:40	Попытка доступа без токена: GET /favicon.ico
 2025-04-04T15:50:58.071+0300	[31mERROR[0m	middleware/token_auth.go:40	Попытка доступа без токена: GET /favicon.ico
+2025-04-04T15:56:21.575+0300	[31mERROR[0m	middleware/token_auth.go:40	Попытка доступа без токена: GET /favicon.ico
+2025-04-04T17:22:31.458+0300	[31mERROR[0m	middleware/token_auth.go:40	Попытка доступа без токена: GET /favicon.ico
+2025-04-04T17:22:32.101+0300	[31mERROR[0m	middleware/token_auth.go:40	Попытка доступа без токена: GET /favicon.ico
+2025-04-04T17:22:33.074+0300	[31mERROR[0m	middleware/token_auth.go:40	Попытка доступа без токена: GET /favicon.ico
+2025-04-04T17:22:33.715+0300	[31mERROR[0m	middleware/token_auth.go:40	Попытка доступа без токена: GET /favicon.ico
+2025-04-04T17:22:35.024+0300	[31mERROR[0m	middleware/token_auth.go:40	Попытка доступа без токена: GET /favicon.ico
+2025-04-04T17:22:35.527+0300	[31mERROR[0m	middleware/token_auth.go:40	Попытка доступа без токена: GET /favicon.ico
+2025-04-04T17:22:38.635+0300	[31mERROR[0m	middleware/token_auth.go:40	Попытка доступа без токена: GET /favicon.ico
+2025-04-04T17:23:23.415+0300	[31mERROR[0m	middleware/token_auth.go:40	Попытка доступа без токена: GET /favicon.ico
+2025-04-04T17:23:27.670+0300	[31mERROR[0m	middleware/token_auth.go:40	Попытка доступа без токена: GET /favicon.ico
+2025-04-04T17:23:28.201+0300	[31mERROR[0m	middleware/token_auth.go:40	Попытка доступа без токена: GET /favicon.ico
+2025-04-04T17:23:31.850+0300	[31mERROR[0m	admin/handlers.go:788	Неверный формат ID пользователя: invalid UUID length: 0
+2025-04-04T17:23:48.234+0300	[31mERROR[0m	middleware/token_auth.go:40	Попытка доступа без токена: GET /favicon.ico
+2025-04-04T17:23:52.931+0300	[31mERROR[0m	middleware/token_auth.go:40	Попытка доступа без токена: GET /favicon.ico
+2025-04-04T17:24:25.239+0300	[31mERROR[0m	middleware/token_auth.go:40	Попытка доступа без токена: GET /favicon.ico
+2025-04-04T17:24:26.517+0300	[31mERROR[0m	middleware/token_auth.go:40	Попытка доступа без токена: GET /favicon.ico
+2025-04-04T17:26:43.689+0300	[31mERROR[0m	telegrambot/userbot.go:403	Ошибка применения кода: user code usage limit exceeded

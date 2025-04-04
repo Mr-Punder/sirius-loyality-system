@@ -69,6 +69,7 @@
                         <th class="sortable" :class="getSortClass('group')" @click="sortBy('group')">Группа</th>
                         <th class="sortable" :class="getSortClass('registration_time')"
                             @click="sortBy('registration_time')">Дата регистрации</th>
+                        <th>Действия</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -148,6 +149,9 @@
                                 </template>
                             </td>
                             <td x-text="formatDate(user.registration_time)"></td>
+                            <td>
+                                <button @click="removeUser(user)" class="btn-danger">Удалить</button>
+                            </td>
                         </tr>
                     </template>
                 </tbody>
@@ -397,6 +401,48 @@
                     this.editing.userId = null;
                     this.editing.field = null;
                     this.editValue = '';
+                },
+
+                removeUser(user) {
+                    if (!confirm(`Вы уверены, что хотите удалить пользователя ${user.first_name} ${user.last_name}?`)) {
+                        return;
+                    }
+
+                    // Получаем токен из localStorage
+                    const token = localStorage.getItem('admin_token');
+
+                    fetch('/api/admin/users/delete', {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': `Bearer ${token}`,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            id: user.id
+                        })
+                    })
+                        .then(response => {
+                            if (!response.ok) {
+                                if (response.status === 401) {
+                                    // Неавторизован
+                                    this.logout();
+                                    throw new Error('Требуется авторизация');
+                                }
+                                throw new Error('Ошибка удаления пользователя');
+                            }
+                            return response.json();
+                        })
+                        .then(data => {
+                            if (data.success) {
+                                // Удаляем пользователя из списка
+                                this.users = this.users.filter(u => u.id !== user.id);
+                                alert('Пользователь успешно удален');
+                            }
+                        })
+                        .catch(error => {
+                            this.error = error.message;
+                            alert(`Ошибка: ${error.message}`);
+                        });
                 }
             };
         }

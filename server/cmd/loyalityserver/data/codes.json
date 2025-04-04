@@ -1,40 +1,10 @@
 [
   {
-    "code": "5a765e63-8de1-4a50-8801-0fe9b94f3246",
-    "amount": 20,
-    "per_user": 0,
-    "total": 0,
-    "applied_count": 0,
-    "is_active": true,
-    "group": "Н3",
-    "error_code": 0
-  },
-  {
-    "code": "c1decf38-f136-4919-8de4-9c9c1583acf0",
-    "amount": 100,
-    "per_user": 1,
-    "total": 20,
-    "applied_count": 0,
-    "is_active": true,
-    "group": "Н3",
-    "error_code": 0
-  },
-  {
-    "code": "5a4e92b6-848a-4b99-98a5-98255279d636",
-    "amount": 100,
-    "per_user": 0,
-    "total": 22,
-    "applied_count": 0,
-    "is_active": true,
-    "group": "",
-    "error_code": 0
-  },
-  {
-    "code": "5189d757-646e-423b-bfb2-dc7f9b5cea63",
-    "amount": 200,
-    "per_user": 3,
-    "total": 0,
-    "applied_count": 4,
+    "code": "12c9850a-c70b-476c-ba43-a8a2b1e000b2",
+    "amount": 300,
+    "per_user": 2,
+    "total": 5,
+    "applied_count": 1,
     "is_active": true,
     "group": "",
     "error_code": 0
@@ -70,11 +40,11 @@
     "error_code": 0
   },
   {
-    "code": "12c9850a-c70b-476c-ba43-a8a2b1e000b2",
-    "amount": 300,
-    "per_user": 2,
-    "total": 5,
-    "applied_count": 1,
+    "code": "5189d757-646e-423b-bfb2-dc7f9b5cea63",
+    "amount": 200,
+    "per_user": 3,
+    "total": 0,
+    "applied_count": 4,
     "is_active": true,
     "group": "",
     "error_code": 0
@@ -84,6 +54,36 @@
     "amount": 10,
     "per_user": 0,
     "total": 0,
+    "applied_count": 0,
+    "is_active": true,
+    "group": "",
+    "error_code": 0
+  },
+  {
+    "code": "5a765e63-8de1-4a50-8801-0fe9b94f3246",
+    "amount": 20,
+    "per_user": 0,
+    "total": 0,
+    "applied_count": 0,
+    "is_active": true,
+    "group": "Н3",
+    "error_code": 0
+  },
+  {
+    "code": "c1decf38-f136-4919-8de4-9c9c1583acf0",
+    "amount": 100,
+    "per_user": 1,
+    "total": 20,
+    "applied_count": 1,
+    "is_active": true,
+    "group": "Н3",
+    "error_code": 0
+  },
+  {
+    "code": "5a4e92b6-848a-4b99-98a5-98255279d636",
+    "amount": 100,
+    "per_user": 0,
+    "total": 22,
     "applied_count": 0,
     "is_active": true,
     "group": "",
