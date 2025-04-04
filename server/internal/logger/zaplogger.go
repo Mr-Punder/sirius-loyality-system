@@ -99,6 +99,11 @@ func (logger *zapLogger) Debug(mes string) {
 	logger.logZap.Debug(mes)
 }
 
+// Debugf logs formatted message at debug level
+func (logger *zapLogger) Debugf(str string, arg ...any) {
+	logger.logZap.Debugf(str, arg...)
+}
+
 // ResponseLog makes response log
 func (logger *zapLogger) ResponseLog(status int, size int, duration time.Duration) {
 	logger.logZap.Infow("Send response with",

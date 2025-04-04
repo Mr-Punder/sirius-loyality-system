@@ -1,12 +1,14 @@
 package telegrambot
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/MrPunder/sirius-loyality-system/internal/logger"
 	"github.com/MrPunder/sirius-loyality-system/internal/models"
@@ -131,6 +133,7 @@ func (ab *AdminBot) Start() error {
 	ab.bot.Handle("👥 Пользователи", ab.handleUsersButton)
 	ab.bot.Handle("🔑 QR-коды", ab.handleCodesButton)
 	ab.bot.Handle("👮 Администраторы", ab.handleAdminsButton)
+	ab.bot.Handle("📣 Рассылка", ab.handleBroadcastButton)
 	ab.bot.Handle("❓ Помощь", ab.handleHelp)
 
 	// Обработчики кнопок меню пользователей
@@ -151,6 +154,7 @@ func (ab *AdminBot) Start() error {
 
 	// Обработчики кнопок для ввода параметров
 	ab.bot.Handle("🚫 Без ограничений", ab.handleNoLimitsButton)
+	ab.bot.Handle("🌐 Все группы", ab.handleAllGroupsButton)
 	ab.bot.Handle("Н1", ab.handleGroupButton)
 	ab.bot.Handle("Н2", ab.handleGroupButton)
 	ab.bot.Handle("Н3", ab.handleGroupButton)
@@ -189,6 +193,25 @@ func (ab *AdminBot) handleText(c tele.Context) error {
 
 	// Обрабатываем сообщение в зависимости от текущего состояния
 	switch state.State {
+	case "broadcast_text":
+		// Обрабатываем ввод текста для рассылки
+		return ab.handleBroadcastText(c, state)
+
+	case "broadcast_group":
+		// Пользователь вводит группу для рассылки
+		// Проверяем, соответствует ли группа формату
+		if text == "🌐 Все группы" {
+			// Рассылка всем пользователям
+			return ab.broadcastMessage(c, state.Params["text"], "")
+		} else if GroupRegex.MatchString(text) {
+			// Нормализуем группу
+			normalizedGroup, _ := NormalizeGroupName(text)
+			// Рассылка пользователям выбранной группы
+			return ab.broadcastMessage(c, state.Params["text"], normalizedGroup)
+		} else {
+			return c.Send("Неверный формат группы. Группа должна быть от Н1 до Н6 (или H1 до H6).")
+		}
+
 	case "generate_code_amount":
 		// Пользователь вводит количество баллов для QR-кода
 		_, err := strconv.Atoi(text)
@@ -330,10 +353,41 @@ func (ab *AdminBot) handleText(c tele.Context) error {
 
 		// Нормализуем группу
 		normalizedGroup, _ := NormalizeGroupName(text)
+		ab.logger.Infof("Пользователь %d выбрал группу %s для фильтрации", c.Sender().ID, normalizedGroup)
 
-		// Вызываем обработчик команды /users с параметром группы
-		c.Message().Payload = normalizedGroup
-		return ab.handleUsers(c)
+		// Сбрасываем состояние пользователя
+		delete(ab.states, userID)
+
+		// Получаем всех пользователей
+		users, err := ab.storage.GetAllUsers()
+		if err != nil {
+			ab.logger.Errorf("Ошибка получения пользователей: %v", err)
+			return c.Send("Произошла ошибка при получении пользователей. Пожалуйста, попробуйте позже.")
+		}
+
+		// Фильтруем пользователей по группе и исключаем удаленных
+		var filteredUsers []*models.User
+		for _, user := range users {
+			if user.Group == normalizedGroup && !user.Deleted {
+				filteredUsers = append(filteredUsers, user)
+			}
+		}
+
+		if len(filteredUsers) == 0 {
+			return c.Send(fmt.Sprintf("Пользователи в группе %s не найдены.", normalizedGroup))
+		}
+
+		// Формируем сообщение со списком пользователей
+		var message strings.Builder
+		message.WriteString(fmt.Sprintf("Список пользователей в группе %s:\n\n", normalizedGroup))
+
+		for i, user := range filteredUsers {
+			message.WriteString(fmt.Sprintf("%d. %s %s (Баллы: %d)\n",
+				i+1, user.FirstName, user.LastName, user.Points))
+		}
+
+		// Отправляем сообщение
+		return c.Send(message.String())
 
 	case "add_points_user_id":
 		// Пользователь вводит ID пользователя
@@ -477,8 +531,8 @@ func (ab *AdminBot) handleGroupButton(c tele.Context) error {
 
 	// Проверяем, есть ли у пользователя активное состояние
 	state, ok := ab.states[userID]
-	if !ok || state.State != "generate_code_group" {
-		// Если нет активного состояния или состояние не соответствует, отправляем справку
+	if !ok {
+		// Если нет активного состояния, отправляем справку
 		keyboard := ab.createMainKeyboard()
 		return c.Send("Используйте кнопки для навигации или /help для просмотра доступных команд.", keyboard)
 	}
@@ -492,11 +546,63 @@ func (ab *AdminBot) handleGroupButton(c tele.Context) error {
 		return c.Send("Неверный формат группы. Группа должна быть от Н1 до Н6 (или H1 до H6).")
 	}
 
-	// Сохраняем группу
-	state.Params["group"] = normalizedGroup
+	// Обрабатываем нажатие в зависимости от текущего состояния
+	switch state.State {
+	case "generate_code_group":
+		// Сохраняем группу
+		state.Params["group"] = normalizedGroup
 
-	// Генерируем QR-код
-	return ab.generateCodeFromParams(c, state.Params)
+		// Генерируем QR-код
+		return ab.generateCodeFromParams(c, state.Params)
+
+	case "broadcast_group":
+		// Рассылка пользователям выбранной группы
+		return ab.broadcastMessage(c, state.Params["text"], normalizedGroup)
+
+	case "user_by_group":
+		// Фильтрация пользователей по группе
+		ab.logger.Infof("Пользователь %d выбрал группу %s для фильтрации", c.Sender().ID, normalizedGroup)
+
+		// Сбрасываем состояние пользователя
+		delete(ab.states, userID)
+
+		// Получаем всех пользователей
+		users, err := ab.storage.GetAllUsers()
+		if err != nil {
+			ab.logger.Errorf("Ошибка получения пользователей: %v", err)
+			return c.Send("Произошла ошибка при получении пользователей. Пожалуйста, попробуйте позже.")
+		}
+
+		// Фильтруем пользователей по группе и исключаем удаленных
+		var filteredUsers []*models.User
+		for _, user := range users {
+			if user.Group == normalizedGroup && !user.Deleted {
+				filteredUsers = append(filteredUsers, user)
+			}
+		}
+
+		if len(filteredUsers) == 0 {
+			return c.Send(fmt.Sprintf("Пользователи в группе %s не найдены.", normalizedGroup))
+		}
+
+		// Формируем сообщение со списком пользователей
+		var message strings.Builder
+		message.WriteString(fmt.Sprintf("Список пользователей в группе %s:\n\n", normalizedGroup))
+
+		for i, user := range filteredUsers {
+			message.WriteString(fmt.Sprintf("%d. %s %s (Баллы: %d)\n",
+				i+1, user.FirstName, user.LastName, user.Points))
+		}
+
+		// Отправляем сообщение
+		return c.Send(message.String())
+
+	default:
+		// Неизвестное состояние, сбрасываем его
+		delete(ab.states, userID)
+		keyboard := ab.createMainKeyboard()
+		return c.Send("Используйте кнопки для навигации или /help для просмотра доступных команд.", keyboard)
+	}
 }
 
 // handleCancelButton обрабатывает нажатие на кнопку "Отмена"
@@ -573,8 +679,32 @@ func (ab *AdminBot) generateCodeFromParams(c tele.Context, params map[string]str
 	// Создаем основную клавиатуру
 	keyboard := ab.createMainKeyboard()
 
-	// Отправляем сообщение с информацией о коде
-	return c.Send(message, keyboard)
+	// Генерируем QR-код в виде изображения
+	qrCodeContent := code.Code.String()
+	qrCodeImage, err := GenerateQRCode(qrCodeContent, 300)
+	if err != nil {
+		ab.logger.Errorf("Ошибка генерации QR-кода: %v", err)
+		// Отправляем сообщение с информацией о коде без изображения
+		return c.Send(message, keyboard)
+	}
+
+	// Создаем объект фото для отправки
+	photo := &tele.Photo{
+		File: tele.File{
+			FileReader: bytes.NewReader(qrCodeImage),
+		},
+		Caption: message,
+	}
+
+	// Отправляем фото с QR-кодом и информацией
+	_, err = c.Bot().Send(c.Recipient(), photo, keyboard)
+	if err != nil {
+		ab.logger.Errorf("Ошибка отправки QR-кода: %v", err)
+		// В случае ошибки отправляем обычное сообщение
+		return c.Send(message, keyboard)
+	}
+
+	return nil
 }
 
 // addAdminFromParams добавляет администратора из параметров
@@ -684,8 +814,30 @@ func (ab *AdminBot) handleUsersByGroupButton(c tele.Context) error {
 		return c.Send("У вас нет доступа к этой функции.")
 	}
 
+	// Инициализируем состояние для выбора группы
+	userID := c.Sender().ID
+	ab.states[userID] = &BotState{
+		State:  "user_by_group",
+		Params: make(map[string]string),
+	}
+
+	// Создаем клавиатуру с кнопками групп
+	keyboard := &tele.ReplyMarkup{ResizeKeyboard: true}
+	btnN1 := keyboard.Text("Н1")
+	btnN2 := keyboard.Text("Н2")
+	btnN3 := keyboard.Text("Н3")
+	btnN4 := keyboard.Text("Н4")
+	btnN5 := keyboard.Text("Н5")
+	btnN6 := keyboard.Text("Н6")
+	btnCancel := keyboard.Text("❌ Отмена")
+	keyboard.Reply(
+		keyboard.Row(btnN1, btnN2, btnN3),
+		keyboard.Row(btnN4, btnN5, btnN6),
+		keyboard.Row(btnCancel),
+	)
+
 	// Отправляем сообщение с запросом группы
-	return c.Send("Введите название группы (например, Н1):")
+	return c.Send("Выберите группу для фильтрации пользователей:", keyboard)
 }
 
 // handleAddPointsButton обрабатывает нажатие на кнопку "Добавить баллы"
@@ -851,12 +1003,14 @@ func (ab *AdminBot) createMainKeyboard() *tele.ReplyMarkup {
 	btnUsers := keyboard.Text("👥 Пользователи")
 	btnCodes := keyboard.Text("🔑 QR-коды")
 	btnAdmins := keyboard.Text("👮 Администраторы")
+	btnBroadcast := keyboard.Text("📣 Рассылка")
 	btnHelp := keyboard.Text("❓ Помощь")
 
 	// Добавляем кнопки на клавиатуру
 	keyboard.Reply(
 		keyboard.Row(btnUsers, btnCodes),
-		keyboard.Row(btnAdmins, btnHelp),
+		keyboard.Row(btnAdmins, btnBroadcast),
+		keyboard.Row(btnHelp),
 	)
 
 	return keyboard
@@ -949,7 +1103,13 @@ func (ab *AdminBot) handleUsers(c tele.Context) error {
 	args := strings.Fields(c.Message().Payload)
 	var group string
 	if len(args) > 0 {
-		group = args[0]
+		// Нормализуем группу, если она указана
+		normalizedGroup, valid := NormalizeGroupName(args[0])
+		if !valid {
+			return c.Send("Неверный формат группы. Группа должна быть от Н1 до Н6 (или H1 до H6).")
+		}
+		group = normalizedGroup
+		ab.logger.Infof("Фильтрация пользователей по группе: %s", group)
 	}
 
 	// Получаем всех пользователей
@@ -984,8 +1144,8 @@ func (ab *AdminBot) handleUsers(c tele.Context) error {
 	}
 
 	for i, user := range filteredUsers {
-		message.WriteString(fmt.Sprintf("%d. %s %s (ID: %s, Группа: %s, Баллы: %d)\n",
-			i+1, user.FirstName, user.LastName, user.Id, user.Group, user.Points))
+		message.WriteString(fmt.Sprintf("%d. %s %s (Группа: %s, Баллы: %d)\n",
+			i+1, user.FirstName, user.LastName, user.Group, user.Points))
 	}
 
 	// Отправляем сообщение
@@ -1310,6 +1470,198 @@ func (ab *AdminBot) handleListCodesButton(c tele.Context) error {
 
 	// Отправляем сообщение
 	return c.Send(message.String())
+}
+
+// handleBroadcastButton обрабатывает нажатие на кнопку "Рассылка"
+func (ab *AdminBot) handleBroadcastButton(c tele.Context) error {
+	ab.logger.Infof("Пользователь %d нажал на кнопку 'Рассылка'", c.Sender().ID)
+
+	// Проверяем, является ли пользователь администратором
+	if !ab.isAdmin(c.Sender().ID) {
+		return c.Send("У вас нет доступа к этой функции.")
+	}
+
+	// Создаем клавиатуру для рассылки
+	keyboard := ab.createBroadcastKeyboard()
+
+	// Инициализируем состояние для рассылки
+	userID := c.Sender().ID
+	ab.states[userID] = &BotState{
+		State:  "broadcast_text",
+		Params: make(map[string]string),
+	}
+
+	// Отправляем сообщение с инструкцией
+	return c.Send("Введите текст сообщения для рассылки всем пользователям:", keyboard)
+}
+
+// createBroadcastKeyboard создает клавиатуру для рассылки
+func (ab *AdminBot) createBroadcastKeyboard() *tele.ReplyMarkup {
+	keyboard := &tele.ReplyMarkup{ResizeKeyboard: true}
+
+	// Создаем кнопки
+	btnCancel := keyboard.Text("❌ Отмена")
+	btnBack := keyboard.Text("🔙 Назад")
+
+	// Добавляем кнопки на клавиатуру
+	keyboard.Reply(
+		keyboard.Row(btnCancel),
+		keyboard.Row(btnBack),
+	)
+
+	return keyboard
+}
+
+// handleText обрабатывает текстовые сообщения (дополнение для рассылки)
+func (ab *AdminBot) handleBroadcastText(c tele.Context, state *BotState) error {
+	// Получаем текст сообщения
+	text := c.Text()
+
+	// Сохраняем текст сообщения
+	state.Params["text"] = text
+
+	// Переходим к следующему шагу - выбор группы
+	state.State = "broadcast_group"
+
+	// Создаем клавиатуру с кнопками групп
+	keyboard := &tele.ReplyMarkup{ResizeKeyboard: true}
+	btnN1 := keyboard.Text("Н1")
+	btnN2 := keyboard.Text("Н2")
+	btnN3 := keyboard.Text("Н3")
+	btnN4 := keyboard.Text("Н4")
+	btnN5 := keyboard.Text("Н5")
+	btnN6 := keyboard.Text("Н6")
+	btnAllGroups := keyboard.Text("🌐 Все группы")
+	btnCancel := keyboard.Text("❌ Отмена")
+	keyboard.Reply(
+		keyboard.Row(btnN1, btnN2, btnN3),
+		keyboard.Row(btnN4, btnN5, btnN6),
+		keyboard.Row(btnAllGroups),
+		keyboard.Row(btnCancel),
+	)
+
+	// Отправляем сообщение с запросом группы
+	return c.Send("Выберите группу для рассылки или нажмите кнопку 'Все группы':", keyboard)
+}
+
+// broadcastMessage отправляет сообщение всем пользователям
+func (ab *AdminBot) broadcastMessage(c tele.Context, text string, group string) error {
+	// Получаем всех пользователей
+	users, err := ab.storage.GetAllUsers()
+	if err != nil {
+		ab.logger.Errorf("Ошибка получения пользователей: %v", err)
+		return c.Send("Произошла ошибка при получении пользователей. Пожалуйста, попробуйте позже.")
+	}
+
+	// Фильтруем пользователей по группе и исключаем удаленных
+	var filteredUsers []*models.User
+	for _, user := range users {
+		if (group == "" || user.Group == group) && !user.Deleted {
+			filteredUsers = append(filteredUsers, user)
+		}
+	}
+
+	if len(filteredUsers) == 0 {
+		if group == "" {
+			return c.Send("Пользователи не найдены.")
+		} else {
+			return c.Send(fmt.Sprintf("Пользователи в группе %s не найдены.", group))
+		}
+	}
+
+	// Отправляем сообщение о начале рассылки
+	statusMsg, err := c.Bot().Send(c.Recipient(), fmt.Sprintf("Начинаем рассылку для %d пользователей...", len(filteredUsers)))
+	if err != nil {
+		ab.logger.Errorf("Ошибка отправки статусного сообщения: %v", err)
+	}
+
+	// Счетчики для статистики
+	successCount := 0
+	errorCount := 0
+
+	// Отправляем сообщение каждому пользователю
+	for i, user := range filteredUsers {
+		// Проверяем, что у пользователя есть Telegram ID
+		if user.Telegramm == "" {
+			ab.logger.Errorf("Пользователь %s не имеет Telegram ID", user.Id)
+			errorCount++
+			continue
+		}
+
+		// Логируем ID пользователя для отладки
+		ab.logger.Infof("Отправка сообщения пользователю %s с Telegram ID: %s", user.Id, user.Telegramm)
+
+		// Парсим Telegram ID из строки, удаляя все нецифровые символы
+		telegramIDStr := strings.TrimSpace(user.Telegramm)
+		// Удаляем все нецифровые символы
+		telegramIDStr = strings.Map(func(r rune) rune {
+			if r >= '0' && r <= '9' {
+				return r
+			}
+			return -1
+		}, telegramIDStr)
+
+		if telegramIDStr == "" {
+			ab.logger.Errorf("Пустой Telegram ID после очистки для пользователя %s", user.Id)
+			errorCount++
+			continue
+		}
+
+		telegramID, parseErr := strconv.ParseInt(telegramIDStr, 10, 64)
+		if parseErr != nil {
+			ab.logger.Errorf("Ошибка парсинга Telegram ID пользователя %s (%s): %v", user.Id, telegramIDStr, parseErr)
+			errorCount++
+			continue
+		}
+
+		// Создаем получателя
+		recipient := &tele.User{
+			ID: telegramID,
+		}
+
+		// Отправляем сообщение
+		_, err := c.Bot().Send(recipient, text)
+		if err != nil {
+			ab.logger.Errorf("Ошибка отправки сообщения пользователю %s (Telegram ID: %d): %v", user.Id, telegramID, err)
+			errorCount++
+		} else {
+			ab.logger.Infof("Успешно отправлено сообщение пользователю %s (Telegram ID: %d)", user.Id, telegramID)
+			successCount++
+		}
+
+		// Обновляем статус каждые 10 пользователей
+		if i%10 == 0 && i > 0 {
+			c.Bot().Edit(statusMsg, fmt.Sprintf("Рассылка в процессе... %d/%d", i, len(filteredUsers)))
+		}
+
+		// Небольшая задержка, чтобы не перегружать API Telegram
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	// Отправляем сообщение о завершении рассылки
+	return c.Send(fmt.Sprintf("Рассылка завершена!\nУспешно отправлено: %d\nОшибок: %d", successCount, errorCount))
+}
+
+// handleAllGroupsButton обрабатывает нажатие на кнопку "Все группы"
+func (ab *AdminBot) handleAllGroupsButton(c tele.Context) error {
+	// Проверяем, является ли пользователь администратором
+	if !ab.isAdmin(c.Sender().ID) {
+		return c.Send("У вас нет доступа к этой функции.")
+	}
+
+	// Получаем ID пользователя
+	userID := c.Sender().ID
+
+	// Проверяем, есть ли у пользователя активное состояние
+	state, ok := ab.states[userID]
+	if !ok || state.State != "broadcast_group" {
+		// Если нет активного состояния или состояние не соответствует, отправляем справку
+		keyboard := ab.createMainKeyboard()
+		return c.Send("Используйте кнопки для навигации или /help для просмотра доступных команд.", keyboard)
+	}
+
+	// Рассылка всем пользователям
+	return ab.broadcastMessage(c, state.Params["text"], "")
 }
 
 // handleHelp обрабатывает команду /help

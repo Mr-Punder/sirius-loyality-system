@@ -95,8 +95,10 @@ func (h *Handler) DefoultHandler(w http.ResponseWriter, r *http.Request) {
 // RegisterUserHandler регистрирует нового пользователя
 func (h *Handler) RegisterUserHandler(w http.ResponseWriter, r *http.Request) {
 	h.logger.Info("Entered RegisterUserHandler")
+	h.logger.Debug("Начало обработки запроса на регистрацию пользователя")
 
 	// Декодируем запрос
+	h.logger.Debug("Декодирование тела запроса")
 	var request struct {
 		Telegramm string `json:"telegramm"`
 		FirstName string `json:"first_name"`
@@ -109,28 +111,41 @@ func (h *Handler) RegisterUserHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
+	h.logger.Debugf("Получены данные пользователя: telegramm=%s, first_name=%s, last_name=%s, group=%s",
+		request.Telegramm, request.FirstName, request.LastName, request.Group)
 
 	// Создаем нового пользователя
+	h.logger.Debug("Создание объекта нового пользователя")
+	userId := uuid.New()
+	h.logger.Debugf("Сгенерирован ID пользователя: %s", userId)
+
+	registrationTime := time.Now()
+	h.logger.Debugf("Время регистрации: %s", registrationTime)
+
 	user := &models.User{
-		Id:               uuid.New(),
+		Id:               userId,
 		Telegramm:        request.Telegramm,
 		FirstName:        request.FirstName,
 		LastName:         request.LastName,
 		MiddleName:       "", // Пустое значение по умолчанию
 		Points:           0,  // Начальное количество баллов
 		Group:            request.Group,
-		RegistrationTime: time.Now(),
+		RegistrationTime: registrationTime,
 		Deleted:          false,
 	}
+	h.logger.Debugf("Создан объект пользователя: %+v", user)
 
 	// Добавляем пользователя в хранилище
+	h.logger.Debug("Добавление пользователя в хранилище")
 	if err := h.storage.AddUser(user); err != nil {
 		h.logger.Errorf("Error adding user: %v", err)
 		http.Error(w, "Error adding user", http.StatusInternalServerError)
 		return
 	}
+	h.logger.Debug("Пользователь успешно добавлен в хранилище")
 
 	// Отправляем ответ
+	h.logger.Debug("Подготовка ответа")
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 
@@ -151,10 +166,12 @@ func (h *Handler) RegisterUserHandler(w http.ResponseWriter, r *http.Request) {
 		Group:            user.Group,
 		RegistrationTime: user.RegistrationTime,
 	}
+	h.logger.Debugf("Подготовлен ответ: %+v", response)
 
 	if err := json.NewEncoder(w).Encode(response); err != nil {
 		h.logger.Errorf("Error encoding response: %v", err)
 	}
+	h.logger.Info("RegisterUserHandler завершен успешно")
 }
 
 // GetUsersHandler возвращает список всех пользователей
@@ -312,8 +329,10 @@ func (h *Handler) DeleteUserHandler(w http.ResponseWriter, r *http.Request) {
 // CreateCodeHandler создает новый QR-код
 func (h *Handler) CreateCodeHandler(w http.ResponseWriter, r *http.Request) {
 	h.logger.Info("Entered CreateCodeHandler")
+	h.logger.Debug("Начало обработки запроса на создание QR-кода")
 
 	// Декодируем запрос
+	h.logger.Debug("Декодирование тела запроса")
 	var request struct {
 		Amount  int    `json:"amount"`
 		PerUser int    `json:"per_user"`
@@ -326,10 +345,16 @@ func (h *Handler) CreateCodeHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
+	h.logger.Debugf("Получены параметры кода: amount=%d, perUser=%d, total=%d, group=%s",
+		request.Amount, request.PerUser, request.Total, request.Group)
 
 	// Создаем новый код
+	h.logger.Debug("Создание объекта нового QR-кода")
+	codeUUID := uuid.New()
+	h.logger.Debugf("Сгенерирован UUID кода: %s", codeUUID)
+
 	code := &models.Code{
-		Code:         uuid.New(),
+		Code:         codeUUID,
 		Amount:       request.Amount,
 		PerUser:      request.PerUser,
 		Total:        request.Total,
@@ -338,21 +363,27 @@ func (h *Handler) CreateCodeHandler(w http.ResponseWriter, r *http.Request) {
 		Group:        request.Group,
 		ErrorCode:    models.ErrorCodeNone,
 	}
+	h.logger.Debugf("Создан объект QR-кода: %+v", code)
 
 	// Добавляем код в хранилище
+	h.logger.Debug("Добавление QR-кода в хранилище")
 	if err := h.storage.AddCode(code); err != nil {
 		h.logger.Errorf("Error adding code: %v", err)
 		http.Error(w, "Error adding code", http.StatusInternalServerError)
 		return
 	}
+	h.logger.Debug("QR-код успешно добавлен в хранилище")
 
 	// Отправляем ответ
+	h.logger.Debug("Подготовка ответа")
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 
+	h.logger.Debugf("Отправка ответа с кодом: %+v", code)
 	if err := json.NewEncoder(w).Encode(code); err != nil {
 		h.logger.Errorf("Error encoding response: %v", err)
 	}
+	h.logger.Info("CreateCodeHandler завершен успешно")
 }
 
 // GetCodesHandler возвращает список всех QR-кодов
@@ -510,21 +541,26 @@ func (h *Handler) DeleteCodeHandler(w http.ResponseWriter, r *http.Request) {
 // ApplyCodeHandler применяет QR-код для пользователя
 func (h *Handler) ApplyCodeHandler(w http.ResponseWriter, r *http.Request) {
 	h.logger.Info("Entered ApplyCodeHandler")
+	h.logger.Debug("Начало обработки запроса на применение QR-кода")
 
 	// Получаем код из URL
 	codeStr := chi.URLParam(r, "code")
+	h.logger.Debugf("Получен код из URL: %s", codeStr)
+
 	codeUUID, err := uuid.Parse(codeStr)
 	if err != nil {
 		h.logger.Errorf("Invalid code: %v", err)
 		http.Error(w, "Invalid code", http.StatusBadRequest)
 		return
 	}
+	h.logger.Debugf("Код успешно преобразован в UUID: %s", codeUUID)
 
 	// Декодируем запрос для получения ID пользователя
 	var request struct {
 		UserID uuid.UUID `json:"user_id"`
 	}
 
+	h.logger.Debug("Декодирование тела запроса для получения ID пользователя")
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 		h.logger.Errorf("Error decoding request: %v", err)
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -532,16 +568,20 @@ func (h *Handler) ApplyCodeHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	userID := request.UserID
+	h.logger.Debugf("Получен ID пользователя: %s", userID)
 
 	// Получаем информацию о коде
+	h.logger.Debugf("Запрос информации о коде %s из хранилища", codeUUID)
 	code, err := h.storage.GetCodeInfo(codeUUID)
 	if err != nil {
 		h.logger.Errorf("Error getting code: %v", err)
 		http.Error(w, "Code not found", http.StatusNotFound)
 		return
 	}
+	h.logger.Debugf("Получена информация о коде: %+v", code)
 
 	// Проверяем, активен ли код
+	h.logger.Debugf("Проверка активности кода. Текущий статус: %v", code.IsActive)
 	if !code.IsActive {
 		h.logger.Error("Code is not active")
 		w.Header().Set("Content-Type", "application/json")
@@ -555,21 +595,28 @@ func (h *Handler) ApplyCodeHandler(w http.ResponseWriter, r *http.Request) {
 			Error:     "Код не активен",
 			ErrorCode: models.ErrorCodeCodeInactive,
 		}
+		h.logger.Debug("Отправка ответа: код не активен")
 		if err := json.NewEncoder(w).Encode(response); err != nil {
 			h.logger.Errorf("Error encoding response: %v", err)
 		}
 		return
 	}
+	h.logger.Debug("Код активен, продолжаем обработку")
 
 	// Проверяем, принадлежит ли пользователь к нужной группе
 	if code.Group != "" {
+		h.logger.Debugf("Код имеет ограничение по группе: %s. Проверяем группу пользователя", code.Group)
+
+		h.logger.Debugf("Запрос информации о пользователе %s из хранилища", userID)
 		user, err := h.storage.GetUser(userID)
 		if err != nil {
 			h.logger.Errorf("Error getting user: %v", err)
 			http.Error(w, "User not found", http.StatusNotFound)
 			return
 		}
+		h.logger.Debugf("Получена информация о пользователе: %+v", user)
 
+		h.logger.Debugf("Сравнение групп: пользователь %s, код %s", user.Group, code.Group)
 		if user.Group != code.Group {
 			h.logger.Errorf("User group %s does not match code group %s", user.Group, code.Group)
 			w.Header().Set("Content-Type", "application/json")
@@ -583,11 +630,15 @@ func (h *Handler) ApplyCodeHandler(w http.ResponseWriter, r *http.Request) {
 				Error:     "Пользователь не принадлежит к группе, для которой предназначен код",
 				ErrorCode: models.ErrorCodeInvalidGroup,
 			}
+			h.logger.Debug("Отправка ответа: несоответствие группы")
 			if err := json.NewEncoder(w).Encode(response); err != nil {
 				h.logger.Errorf("Error encoding response: %v", err)
 			}
 			return
 		}
+		h.logger.Debug("Группа пользователя соответствует группе кода")
+	} else {
+		h.logger.Debug("Код не имеет ограничений по группе")
 	}
 
 	// Создаем новое использование кода
@@ -597,14 +648,17 @@ func (h *Handler) ApplyCodeHandler(w http.ResponseWriter, r *http.Request) {
 		UserId: userID,
 		Count:  1,
 	}
+	h.logger.Debugf("Создано новое использование кода: %+v", usage)
 
 	// Добавляем использование кода
+	h.logger.Debug("Добавление использования кода в хранилище")
 	if err := h.storage.AddCodeUsage(usage); err != nil {
 		h.logger.Errorf("Error applying code: %v", err)
 
 		// Возвращаем более информативные ошибки в зависимости от типа ошибки
 		switch err.Error() {
 		case "code usage limit exceeded":
+			h.logger.Debug("Ошибка: превышено общее количество использований кода")
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusBadRequest)
 			response := struct {
@@ -621,6 +675,7 @@ func (h *Handler) ApplyCodeHandler(w http.ResponseWriter, r *http.Request) {
 			}
 			return
 		case "user code usage limit exceeded":
+			h.logger.Debug("Ошибка: превышено количество использований кода пользователем")
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusBadRequest)
 			response := struct {
@@ -637,6 +692,7 @@ func (h *Handler) ApplyCodeHandler(w http.ResponseWriter, r *http.Request) {
 			}
 			return
 		case "code is not active":
+			h.logger.Debug("Ошибка: код не активен")
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusBadRequest)
 			response := struct {
@@ -653,10 +709,12 @@ func (h *Handler) ApplyCodeHandler(w http.ResponseWriter, r *http.Request) {
 			}
 			return
 		default:
+			h.logger.Debugf("Неизвестная ошибка: %v", err)
 			http.Error(w, "Error applying code", http.StatusInternalServerError)
 			return
 		}
 	}
+	h.logger.Debug("Использование кода успешно добавлено")
 
 	// Создаем транзакцию
 	transaction := &models.Transaction{
@@ -666,23 +724,29 @@ func (h *Handler) ApplyCodeHandler(w http.ResponseWriter, r *http.Request) {
 		Diff:   code.Amount,
 		Time:   time.Now(),
 	}
+	h.logger.Debugf("Создана новая транзакция: %+v", transaction)
 
 	// Добавляем транзакцию
+	h.logger.Debug("Добавление транзакции в хранилище")
 	if err := h.storage.AddTransaction(transaction); err != nil {
 		h.logger.Errorf("Error adding transaction: %v", err)
 		http.Error(w, "Error adding transaction", http.StatusInternalServerError)
 		return
 	}
+	h.logger.Debug("Транзакция успешно добавлена")
 
 	// Получаем обновленные баллы пользователя
+	h.logger.Debugf("Запрос обновленных баллов пользователя %s", userID)
 	points, err := h.storage.GetUserPoints(userID)
 	if err != nil {
 		h.logger.Errorf("Error getting user points: %v", err)
 		http.Error(w, "Error getting user points", http.StatusInternalServerError)
 		return
 	}
+	h.logger.Debugf("Получены обновленные баллы пользователя: %d", points)
 
 	// Отправляем ответ
+	h.logger.Debug("Подготовка успешного ответа")
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 
@@ -695,10 +759,12 @@ func (h *Handler) ApplyCodeHandler(w http.ResponseWriter, r *http.Request) {
 		PointsAdded: code.Amount,
 		TotalPoints: points,
 	}
+	h.logger.Debugf("Отправка ответа: %+v", response)
 
 	if err := json.NewEncoder(w).Encode(response); err != nil {
 		h.logger.Errorf("Error encoding response: %v", err)
 	}
+	h.logger.Info("ApplyCodeHandler завершен успешно")
 }
 
 // Обработчики для транзакций

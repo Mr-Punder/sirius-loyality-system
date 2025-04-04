@@ -2,7 +2,7 @@ server:
   runaddress: "127.0.0.1:8080"
 
 logger:
-  level: "info"
+  level: "debug"
   path: "/Users/goomer125/Documents/sirius-rating-system/server/cmd/loyalityserver/logs/server.log"
   errorpath: "/Users/goomer125/Documents/sirius-rating-system/server/cmd/loyalityserver/logs/server_error.log"
   maxsize: 10 # Максимальный размер файла в МБ перед ротацией

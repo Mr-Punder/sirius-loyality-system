@@ -61,9 +61,9 @@ func main() {
 	// Инициализация сервера
 	lsserver := loyalityserver.NewLoyalityServer(conf.Server.RunAddress, router, log)
 
-	// Инициализация middleware
-	comp := middleware.NewGzipCompressor(log)
-	log.Info("Initialized compressor")
+	// // Инициализация middleware
+	// comp := middleware.NewGzipCompressor(log)
+	// log.Info("Initialized compressor")
 
 	hLogger := middleware.NewHTTPLoger(log)
 	log.Info("Initialized middleware functions")
@@ -75,7 +75,8 @@ func main() {
 	})
 	log.Info("Initialized token auth middleware")
 
-	lsserver.AddMidleware(comp.CompressHandler, hLogger.HTTPLogHandler, tokenAuth.Middleware)
+	// lsserver.AddMidleware(comp.CompressHandler, hLogger.HTTPLogHandler, tokenAuth.Middleware)
+	lsserver.AddMidleware(hLogger.HTTPLogHandler, tokenAuth.Middleware)
 
 	go lsserver.RunServer()
 

@@ -1,21 +1,10 @@
-2025-04-02T21:16:21.048+0300	[31mERROR[0m	telegrambot/adminbot.go:58	Ошибка загрузки списка администраторов: json: cannot unmarshal object into Go struct field AdminsList.admins of type int64
-2025-04-02T21:20:43.775+0300	[31mERROR[0m	telegrambot/adminbot.go:58	Ошибка загрузки списка администраторов: json: cannot unmarshal object into Go struct field AdminsList.admins of type int64
-2025-04-02T21:23:19.038+0300	[31mERROR[0m	telegrambot/adminbot.go:58	Ошибка загрузки списка администраторов: json: cannot unmarshal object into Go struct field AdminsList.admins of type int64
-2025-04-02T21:23:46.165+0300	[31mERROR[0m	telegrambot/adminbot.go:58	Ошибка загрузки списка администраторов: json: cannot unmarshal object into Go struct field AdminsList.admins of type int64
-2025-04-03T17:40:38.609+0300	[31mERROR[0m	middleware/token_auth.go:58	Неверный токен: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3NDM2OTQ5OTksImlhdCI6MTc0MzY4Nzc5OSwiaXNfYWRtaW4iOnRydWV9.U3HZa0Ibhart8K0xJLBBen7LqgvkHE1-INsscqo5UdI
-2025-04-03T17:40:38.609+0300	[31mERROR[0m	middleware/token_auth.go:58	Неверный токен: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3NDM2OTQ5OTksImlhdCI6MTc0MzY4Nzc5OSwiaXNfYWRtaW4iOnRydWV9.U3HZa0Ibhart8K0xJLBBen7LqgvkHE1-INsscqo5UdI
-2025-04-03T17:40:38.617+0300	[31mERROR[0m	middleware/token_auth.go:42	Отсутствует заголовок Authorization: /favicon.ico
-2025-04-03T17:40:38.682+0300	[31mERROR[0m	middleware/token_auth.go:42	Отсутствует заголовок Authorization: /favicon.ico
-2025-04-03T17:40:45.576+0300	[31mERROR[0m	middleware/token_auth.go:42	Отсутствует заголовок Authorization: /api/admin/login
-2025-04-03T17:40:56.221+0300	[31mERROR[0m	middleware/token_auth.go:42	Отсутствует заголовок Authorization: /api/admin/login
-2025-04-03T17:40:57.831+0300	[31mERROR[0m	middleware/token_auth.go:42	Отсутствует заголовок Authorization: /api/admin/login
-2025-04-03T17:40:58.370+0300	[31mERROR[0m	middleware/token_auth.go:42	Отсутствует заголовок Authorization: /api/admin/login
-2025-04-03T17:40:58.554+0300	[31mERROR[0m	middleware/token_auth.go:42	Отсутствует заголовок Authorization: /api/admin/login
-2025-04-03T17:41:03.693+0300	[31mERROR[0m	middleware/token_auth.go:42	Отсутствует заголовок Authorization: /api/admin/login
-2025-04-03T17:42:19.375+0300	[31mERROR[0m	middleware/token_auth.go:42	Отсутствует заголовок Authorization: /favicon.ico
-2025-04-03T17:42:21.337+0300	[31mERROR[0m	middleware/token_auth.go:42	Отсутствует заголовок Authorization: /favicon.ico
-2025-04-03T17:42:22.069+0300	[31mERROR[0m	middleware/token_auth.go:42	Отсутствует заголовок Authorization: /favicon.ico
-2025-04-03T17:42:25.317+0300	[31mERROR[0m	middleware/token_auth.go:42	Отсутствует заголовок Authorization: /favicon.ico
-2025-04-03T17:43:21.775+0300	[31mERROR[0m	middleware/token_auth.go:42	Отсутствует заголовок Authorization: /favicon.ico
-2025-04-03T17:43:22.544+0300	[31mERROR[0m	middleware/token_auth.go:42	Отсутствует заголовок Authorization: /favicon.ico
-2025-04-03T17:43:23.416+0300	[31mERROR[0m	middleware/token_auth.go:42	Отсутствует заголовок Authorization: /favicon.ico
+2025-04-04T15:29:43.734+0300	[31mERROR[0m	middleware/token_auth.go:40	Попытка доступа без токена: GET /favicon.ico
+2025-04-04T15:31:09.830+0300	[31mERROR[0m	middleware/token_auth.go:40	Попытка доступа без токена: GET /favicon.ico
+2025-04-04T15:35:34.472+0300	[31mERROR[0m	middleware/token_auth.go:40	Попытка доступа без токена: GET /favicon.ico
+2025-04-04T15:35:46.664+0300	[31mERROR[0m	middleware/token_auth.go:40	Попытка доступа без токена: GET /favicon.ico
+2025-04-04T15:46:39.050+0300	[31mERROR[0m	middleware/token_auth.go:40	Попытка доступа без токена: GET /favicon.ico
+2025-04-04T15:48:11.461+0300	[31mERROR[0m	middleware/token_auth.go:40	Попытка доступа без токена: GET /favicon.ico
+2025-04-04T15:48:18.772+0300	[31mERROR[0m	middleware/token_auth.go:40	Попытка доступа без токена: GET /favicon.ico
+2025-04-04T15:50:50.875+0300	[31mERROR[0m	middleware/token_auth.go:40	Попытка доступа без токена: GET /favicon.ico
+2025-04-04T15:50:54.438+0300	[31mERROR[0m	middleware/token_auth.go:40	Попытка доступа без токена: GET /favicon.ico
+2025-04-04T15:50:58.071+0300	[31mERROR[0m	middleware/token_auth.go:40	Попытка доступа без токена: GET /favicon.ico
