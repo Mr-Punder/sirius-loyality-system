@@ -32,8 +32,18 @@ COPY server/migrations/ ./migrations/
 # Создаем директории для данных, логов и конфигурации
 RUN mkdir -p /app/data /app/logs /app/config
 
-# Копируем конфигурационный файл
+# Копируем конфигурационный файл и токены
 COPY server/cmd/loyalityserver/config.yaml ./config/
+
+# Создаем директории для токенов и копируем токены
+RUN mkdir -p /app/cmd/telegrambot/user /app/cmd/telegrambot/admin
+COPY config/token.txt /app/cmd/telegrambot/user/token.txt
+COPY config/admin_token.txt /app/cmd/telegrambot/admin/token.txt
+COPY config/admins.json /app/cmd/telegrambot/admin/admins.json
+COPY server/cmd/telegrambot/api_token.txt /app/cmd/telegrambot/api_token.txt
+
+# Создаем файл .dockerenv для определения запуска в Docker
+RUN touch /.dockerenv
 
 # Настройка supervisord для управления процессами
 COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf

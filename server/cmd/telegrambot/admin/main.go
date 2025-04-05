@@ -33,8 +33,16 @@ func main() {
 	flag.StringVar(&apiToken, "api-token", "", "API token for server authentication")
 	flag.StringVar(&apiTokenPath, "api-token-file", "cmd/telegrambot/api_token.txt", "path to file with API token")
 
-	// Устанавливаем переменную окружения для пути к конфигурационному файлу
-	os.Setenv("CONFIG_PATH", "cmd/loyalityserver/config.yaml")
+	// Проверяем, запущены ли мы в Docker
+	if _, err := os.Stat("/.dockerenv"); err == nil {
+		// Если запущены в Docker, используем абсолютные пути
+		tokenPath = "/app/cmd/telegrambot/admin/token.txt"
+		apiTokenPath = "/app/cmd/telegrambot/api_token.txt"
+		os.Setenv("CONFIG_PATH", "/app/config/config.yaml")
+	} else {
+		// Если запущены локально, используем относительные пути
+		os.Setenv("CONFIG_PATH", "cmd/loyalityserver/config.yaml")
+	}
 
 	flag.Parse()
 
