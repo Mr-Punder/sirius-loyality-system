@@ -4,7 +4,7 @@ WORKDIR /app
 COPY server/ ./
 RUN go mod download
 # Сборка основного сервера
-RUN CGO_ENABLED=1 GOOS=linux go build -o loyalityserver ./cmd/loyalityserver
+RUN GOOS=linux go build -o loyalityserver ./cmd/loyalityserver
 # Сборка пользовательского бота
 RUN go build -o userbot ./cmd/telegrambot/user
 # Сборка административного бота
