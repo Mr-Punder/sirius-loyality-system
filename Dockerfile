@@ -1,9 +1,12 @@
 FROM golang:1.23-alpine AS builder
 
+# Устанавливаем необходимые пакеты для CGO
+RUN apk add --no-cache gcc musl-dev
+
 WORKDIR /app
 COPY server/ ./
 RUN go mod download
-# Сборка основного сервера
+# Сборка основного сервера с CGO
 RUN CGO_ENABLED=1 GOOS=linux go build -o loyalityserver ./cmd/loyalityserver
 # Сборка пользовательского бота
 RUN go build -o userbot ./cmd/telegrambot/user
@@ -12,7 +15,9 @@ RUN go build -o adminbot ./cmd/telegrambot/admin
 
 FROM alpine:latest
 
+# Устанавливаем необходимые пакеты
 RUN apk --no-cache add ca-certificates tzdata sqlite supervisor
+
 WORKDIR /app
 
 # Копируем бинарные файлы из builder
