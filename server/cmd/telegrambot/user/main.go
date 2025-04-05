@@ -30,14 +30,22 @@ func main() {
 	flag.StringVar(&apiToken, "api-token", "", "API token for server authentication")
 	flag.StringVar(&apiTokenPath, "api-token-file", "cmd/telegrambot/api_token.txt", "path to file with API token")
 
-	// Проверяем, запущены ли мы в Docker
-	if _, err := os.Stat("/.dockerenv"); err == nil {
-		// Если запущены в Docker, используем абсолютные пути
-		tokenPath = "/app/cmd/telegrambot/user/token.txt"
-		apiTokenPath = "/app/cmd/telegrambot/api_token.txt"
-		os.Setenv("CONFIG_PATH", "/app/config/config.yaml")
+	// Проверяем наличие переменных окружения и используем их, если они заданы
+	if envTokenPath := os.Getenv("TOKEN_PATH"); envTokenPath != "" {
+		tokenPath = envTokenPath
+	}
+
+	if envServerURL := os.Getenv("SERVER_URL"); envServerURL != "" {
+		serverURL = envServerURL
+	}
+
+	if envApiTokenPath := os.Getenv("API_TOKEN_PATH"); envApiTokenPath != "" {
+		apiTokenPath = envApiTokenPath
+	}
+
+	if envConfigPath := os.Getenv("CONFIG_PATH"); envConfigPath != "" {
+		os.Setenv("CONFIG_PATH", envConfigPath)
 	} else {
-		// Если запущены локально, используем относительные пути
 		os.Setenv("CONFIG_PATH", "cmd/loyalityserver/config.yaml")
 	}
 
@@ -45,6 +53,7 @@ func main() {
 
 	// Если токен не указан через флаг, пытаемся прочитать его из файла
 	if token == "" {
+		log.Printf("Чтение токена из файла: %s", tokenPath)
 		tokenData, err := os.ReadFile(tokenPath)
 		if err != nil {
 			log.Fatalf("Ошибка чтения токена из файла: %v", err)
@@ -54,6 +63,7 @@ func main() {
 
 	// Если API-токен не указан через флаг, пытаемся прочитать его из файла
 	if apiToken == "" {
+		log.Printf("Чтение API-токена из файла: %s", apiTokenPath)
 		apiTokenData, err := os.ReadFile(apiTokenPath)
 		if err != nil {
 			log.Fatalf("Ошибка чтения API-токена из файла: %v", err)

@@ -1,10 +1,10 @@
 server:
-  runaddress: "127.0.0.1:8080"
+  runaddress: "0.0.0.0:8080"
 
 logger:
   level: "debug"
-  path: "/Users/goomer125/Documents/sirius-rating-system/server/cmd/loyalityserver/logs/server.log"
-  errorpath: "/Users/goomer125/Documents/sirius-rating-system/server/cmd/loyalityserver/logs/server_error.log"
+  path: "logs/server.log"
+  errorpath: "logs/server_error.log"
   maxsize: 10 # Максимальный размер файла в МБ перед ротацией
   maxbackups: 5 # Максимальное количество старых файлов логов для хранения
   maxage: 30 # Максимальное количество дней для хранения старых файлов логов
@@ -15,15 +15,15 @@ storage:
   type: "sqlite"
 
   # Параметры для file storage
-  # datapath: "/Users/goomer125/Documents/sirius-rating-system/server/cmd/loyalityserver/data"
+  # datapath: "data"
 
   # Параметры для PostgreSQL
   # connection_string: "postgres:///loyality_system?sslmode=disable"
-  # migrations_path: "/Users/goomer125/Documents/sirius-rating-system/server/migrations/postgres"
+  # migrations_path: "../../../migrations/postgres"
 
   # Параметры для SQLite
-  db_path: "/Users/goomer125/Documents/sirius-rating-system/server/cmd/loyalityserver/data/loyality_system.db"
-  migrations_path: "/Users/goomer125/Documents/sirius-rating-system/server/migrations/sqlite"
+  db_path: "data/loyality_system.db"
+  migrations_path: "../../../migrations/sqlite"
 
 admin:
   jwt_secret: "sirius-rating-system-secret-key-2025"
