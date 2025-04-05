@@ -1,0 +1,15 @@
+server:
+  address: ":80"
+  read_timeout: 5s
+  write_timeout: 10s
+  idle_timeout: 120s
+  shutdown_timeout: 20s
+
+storage:
+  type: "sqlite"
+  dsn: "/app/data/loyality_system.db"
+
+logger:
+  level: "info"
+  file: "/app/logs/server.log"
+  error_file: "/app/logs/server_error.log"
