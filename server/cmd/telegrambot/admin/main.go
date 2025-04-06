@@ -11,7 +11,6 @@ import (
 
 	"github.com/MrPunder/sirius-loyality-system/internal/config"
 	"github.com/MrPunder/sirius-loyality-system/internal/logger"
-	"github.com/MrPunder/sirius-loyality-system/internal/storage"
 	"github.com/MrPunder/sirius-loyality-system/internal/telegrambot"
 )
 
@@ -91,31 +90,8 @@ func main() {
 	}
 	zapLogger.Info("Инициализирован логгер")
 
-	// Инициализируем хранилище
-	var store storage.Storage
-	var storeErr error
-
-	switch conf.Storage.Type {
-	case "sqlite":
-		zapLogger.Info("Инициализация SQLite хранилища")
-		store, storeErr = storage.NewSQLiteStorage(conf.Storage.DBPath, conf.Storage.MigrationsPath)
-	case "postgres":
-		zapLogger.Info("Инициализация PostgreSQL хранилища")
-		store, storeErr = storage.NewPgStorage(conf.Storage.ConnectionString, conf.Storage.MigrationsPath)
-	case "file":
-		zapLogger.Info("Инициализация файлового хранилища")
-		store, storeErr = storage.NewFilestorage(conf.Storage.DataPath)
-	default:
-		zapLogger.Info("Инициализация хранилища в памяти")
-		store = storage.NewMemstorage()
-	}
-
-	if storeErr != nil {
-		zapLogger.Errorf("Ошибка инициализации хранилища: %v", storeErr)
-		os.Exit(1)
-	}
-
-	zapLogger.Info("Хранилище инициализировано успешно")
+	// Бот не должен напрямую использовать хранилище данных, а только API
+	zapLogger.Info("Бот будет использовать только API для взаимодействия с системой")
 
 	// Проверяем, указан ли токен
 	if token == "" {
@@ -141,7 +117,7 @@ func main() {
 	}
 
 	// Создаем бота
-	bot, err := telegrambot.NewAdminBot(botConfig, store, zapLogger)
+	bot, err := telegrambot.NewAdminBot(botConfig, nil, zapLogger)
 	if err != nil {
 		zapLogger.Errorf("Ошибка создания бота: %v", err)
 		os.Exit(1)

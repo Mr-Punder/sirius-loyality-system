@@ -39,7 +39,6 @@ type BotState struct {
 // AdminBot представляет бота для администраторов
 type AdminBot struct {
 	bot        *tele.Bot
-	storage    storage.Storage
 	logger     logger.Logger
 	config     Config
 	admins     AdminsList
@@ -68,7 +67,6 @@ func NewAdminBot(config Config, storage storage.Storage, logger logger.Logger) (
 	// Создаем бота
 	adminBot := &AdminBot{
 		bot:        bot,
-		storage:    storage,
 		logger:     logger,
 		config:     config,
 		adminsPath: adminsPath,
