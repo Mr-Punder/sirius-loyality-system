@@ -36,6 +36,8 @@ RUN mkdir -p /app/data /app/logs /app/config
 
 COPY config/ ./config/
 
+COPY data/admin_password.hash ./data/admin_password.hash
+
 # Создаем файл .dockerenv для определения запуска в Docker
 RUN touch /.dockerenv
 
