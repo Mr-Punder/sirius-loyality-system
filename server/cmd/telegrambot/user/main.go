@@ -22,6 +22,7 @@ func main() {
 		tokenPath    string
 		apiToken     string
 		apiTokenPath string
+		configPath   string
 	)
 
 	flag.StringVar(&token, "token", "", "telegram bot token (deprecated, use token.txt file instead)")
@@ -29,6 +30,7 @@ func main() {
 	flag.StringVar(&tokenPath, "token-file", "cmd/telegrambot/user/token.txt", "path to file with telegram bot token")
 	flag.StringVar(&apiToken, "api-token", "", "API token for server authentication")
 	flag.StringVar(&apiTokenPath, "api-token-file", "cmd/telegrambot/api_token.txt", "path to file with API token")
+	flag.StringVar(&configPath, "config", "cmd/loyalityserver/config.yaml", "path to config")
 
 	// Проверяем наличие переменных окружения и используем их, если они заданы
 	if envTokenPath := os.Getenv("TOKEN_PATH"); envTokenPath != "" {
@@ -43,10 +45,8 @@ func main() {
 		apiTokenPath = envApiTokenPath
 	}
 
-	if envConfigPath := os.Getenv("CONFIG_PATH"); envConfigPath != "" {
-		os.Setenv("CONFIG_PATH", envConfigPath)
-	} else {
-		os.Setenv("CONFIG_PATH", "cmd/loyalityserver/config.yaml")
+	if envConfigPath := os.Getenv("CONFIG_PATH"); envConfigPath == "" {
+		configPath = envConfigPath
 	}
 
 	flag.Parse()
@@ -72,7 +72,7 @@ func main() {
 	}
 
 	// Загружаем конфигурацию
-	conf, err := config.LoadConfig()
+	conf, err := config.LoadConfig(configPath)
 	if err != nil {
 		log.Fatalf("Ошибка загрузки конфигурации: %v", err)
 	}

@@ -32,18 +32,31 @@ COPY server/migrations/ ./migrations/
 # Создаем директории для данных, логов и конфигурации
 RUN mkdir -p /app/data /app/logs /app/config
 
-# Копируем конфигурационный файл и токены
+# Копируем конфигурационный файл
 COPY server/cmd/loyalityserver/config.yaml ./config/
+COPY config/config.yaml ./config/config.yaml
 
-# Создаем директории для токенов и копируем токены
+# Создаем директории для токенов
 RUN mkdir -p /app/cmd/telegrambot/user /app/cmd/telegrambot/admin
-COPY config/token.txt /app/cmd/telegrambot/user/token.txt
-COPY config/admin_token.txt /app/cmd/telegrambot/admin/token.txt
-COPY config/admins.json /app/cmd/telegrambot/admin/admins.json
-COPY server/cmd/telegrambot/api_token.txt /app/cmd/telegrambot/api_token.txt
+
+# Создаем пустые файлы для токенов, которые будут заполнены при запуске контейнера
+RUN touch /app/cmd/telegrambot/user/token.txt \
+    /app/cmd/telegrambot/admin/token.txt \
+    /app/cmd/telegrambot/admin/admins.json \
+    /app/cmd/telegrambot/api_token.txt
 
 # Создаем файл .dockerenv для определения запуска в Docker
 RUN touch /.dockerenv
+
+# Устанавливаем переменные окружения для путей
+ENV ADMIN_STATIC_DIR="/app/static/admin"
+ENV ADMIN_ADMINS_PATH="/app/cmd/telegrambot/admin/admins.json"
+ENV CONFIG_PATH="/app/config/config.yaml"
+ENV TOKEN_PATH="/app/cmd/telegrambot/user/token.txt"
+ENV ADMIN_TOKEN_PATH="/app/cmd/telegrambot/admin/token.txt"
+ENV API_TOKEN_PATH="/app/cmd/telegrambot/api_token.txt"
+ENV MIGRATIONS_PATH="/app/migrations/sqlite"
+ENV DB_PATH="/app/data/loyality_system.db"
 
 # Настройка supervisord для управления процессами
 COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf

@@ -51,7 +51,7 @@ type Config struct {
 }
 
 // LoadConfig загружает конфигурацию из файла YAML и учитывает флаги командной строки
-func LoadConfig() (*Config, error) {
+func LoadConfig(config_path string) (*Config, error) {
 	// Определение флагов
 	var logLevel string
 	var runAddress string
@@ -69,6 +69,9 @@ func LoadConfig() (*Config, error) {
 	configPath := os.Getenv("CONFIG_PATH")
 	if configPath == "" {
 		configPath = "cmd/loyalityserver/config.yaml"
+	}
+	if config_path != "" {
+		configPath = config_path
 	}
 
 	// Чтение файла конфигурации

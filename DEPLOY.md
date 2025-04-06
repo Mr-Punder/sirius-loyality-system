@@ -58,8 +58,11 @@ cd ~/sirius-loyality-system
 ### 3. Настройка конфигурационных файлов
 
 ```bash
-# Создаем директории для данных и логов
+# Создаем директории для данных, логов и конфигурации
 mkdir -p ~/sirius-loyality-system/data ~/sirius-loyality-system/logs ~/sirius-loyality-system/config
+
+# Создаем директории для токенов
+mkdir -p ~/sirius-loyality-system/server/cmd/telegrambot/user ~/sirius-loyality-system/server/cmd/telegrambot/admin
 
 # Создаем файл с токеном для пользовательского бота
 echo "YOUR_USER_BOT_TOKEN" > ~/sirius-loyality-system/config/token.txt
@@ -67,11 +70,68 @@ echo "YOUR_USER_BOT_TOKEN" > ~/sirius-loyality-system/config/token.txt
 # Создаем файл с токеном для административного бота
 echo "YOUR_ADMIN_BOT_TOKEN" > ~/sirius-loyality-system/config/admin_token.txt
 
+
 # Создаем файл со списком администраторов
-echo '["ADMIN_ID_1", "ADMIN_ID_2"]' > ~/sirius-loyality-system/config/admins.json
+echo '{"admins":[{"id":ADMIN_ID_1,"name":"Admin Name"}]}' > ~/sirius-loyality-system/config/admins.json
+
+
+# Создаем файл с API-токеном для ботов
+echo "sirius-rating-system-api-token-2025" > ~/sirius-loyality-system/server/cmd/telegrambot/api_token.txt
 ```
 
-Не забудьте заменить `YOUR_USER_BOT_TOKEN`, `YOUR_ADMIN_BOT_TOKEN`, `ADMIN_ID_1` и `ADMIN_ID_2` на реальные значения.
+Не забудьте заменить:
+
+- `YOUR_USER_BOT_TOKEN` - токен пользовательского бота, полученный от @BotFather
+- `YOUR_ADMIN_BOT_TOKEN` - токен административного бота, полученный от @BotFather
+- `ADMIN_ID_1` - ID администратора в Telegram (числовое значение, без кавычек)
+- `Admin Name` - имя администратора (опционально)
+
+### 3.1. Настройка путей и доступа извне
+
+Для корректной работы приложения в Docker и доступа извне, необходимо изменить конфигурационные файлы:
+
+1. Отредактируйте файл `docker-compose.yml`, чтобы указать внешний порт:
+
+```bash
+nano ~/sirius-loyality-system/docker-compose.yml
+```
+
+Убедитесь, что в секции `ports` указан маппинг портов, например:
+
+```yaml
+ports:
+  - "80:80"  # Внешний порт : Внутренний порт
+```
+
+2. Отредактируйте файл `supervisord.conf`, чтобы указать правильный адрес сервера для ботов:
+
+```bash
+nano ~/sirius-loyality-system/supervisord.conf
+```
+
+Найдите строки с `environment=` для `userbot` и `adminbot` и измените `SERVER_URL` на внешний IP-адрес или домен вашего сервера:
+
+```
+environment=TOKEN_PATH="/app/cmd/telegrambot/user/token.txt",SERVER_URL="http://YOUR_SERVER_IP_OR_DOMAIN",API_TOKEN_PATH="/app/cmd/telegrambot/api_token.txt"
+```
+
+```
+environment=TOKEN_PATH="/app/cmd/telegrambot/admin/token.txt",ADMINS_PATH="/app/cmd/telegrambot/admin/admins.json",SERVER_URL="http://YOUR_SERVER_IP_OR_DOMAIN",API_TOKEN_PATH="/app/cmd/telegrambot/api_token.txt"
+```
+
+Замените `YOUR_SERVER_IP_OR_DOMAIN` на внешний IP-адрес или домен вашего сервера.
+
+3. Приложение использует следующие переменные окружения для путей к файлам:
+
+- `CONFIG_PATH` - путь к конфигурационному файлу (по умолчанию: `/app/config/config.yaml`)
+- `MIGRATIONS_PATH` - путь к миграциям SQLite (по умолчанию: `/app/migrations/sqlite`)
+- `DB_PATH` - путь к файлу базы данных SQLite (по умолчанию: `/app/data/loyality_system.db`)
+- `ADMIN_STATIC_DIR` - путь к директории со статическими файлами админки (по умолчанию: `/app/static/admin`)
+- `ADMIN_ADMINS_PATH` - путь к файлу со списком администраторов (по умолчанию: `/app/cmd/telegrambot/admin/admins.json`)
+- `TOKEN_PATH` - путь к файлу с токеном пользовательского бота (по умолчанию: `/app/cmd/telegrambot/user/token.txt`)
+- `API_TOKEN_PATH` - путь к файлу с API-токеном (по умолчанию: `/app/cmd/telegrambot/api_token.txt`)
+
+Эти переменные уже настроены в Dockerfile и не требуют изменения, если вы не меняете структуру директорий в контейнере.
 
 ### 4. Сборка и запуск Docker-контейнера
 
@@ -248,8 +308,8 @@ docker-compose logs
 Проверьте, что токены ботов указаны правильно:
 
 ```bash
-cat ~/sirius-loyality-system/config/token.txt
-cat ~/sirius-loyality-system/config/admin_token.txt
+cat ~/sirius-loyality-system/server/cmd/telegrambot/user/token.txt
+cat ~/sirius-loyality-system/server/cmd/telegrambot/admin/token.txt
 ```
 
 ### Проблема: Не работает автоматическое обновление
