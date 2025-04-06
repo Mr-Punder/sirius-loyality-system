@@ -1,4 +1,4 @@
-FROM golang:latest AS builder
+FROM golang:1.22-alpine AS builder
 
 # Устанавливаем необходимые пакеты для CGO
 RUN apk add --no-cache gcc musl-dev
