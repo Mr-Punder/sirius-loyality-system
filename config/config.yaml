@@ -1,15 +1,24 @@
 server:
-  address: ":80"
-  read_timeout: 5s
-  write_timeout: 10s
-  idle_timeout: 120s
-  shutdown_timeout: 20s
+  runaddress: "0.0.0.0:80"
+
+logger:
+  level: "debug"
+  path: "/app/logs/server.log"
+  errorpath: "/app/logs/server_error.log"
+  maxsize: 10
+  maxbackups: 5
+  maxage: 30
+  compress: true
 
 storage:
   type: "sqlite"
-  dsn: "/app/data/loyality_system.db"
+  db_path: "/app/data/loyality_system.db"
+  migrations_path: "/app/migrations/sqlite"
 
-logger:
-  level: "info"
-  path: "/app/logs/server.log"
-  error_path: "/app/logs/server_error.log"
+admin:
+  jwt_secret: "sirius-rating-system-secret-key-2025"
+  static_dir: "/app/static/admin"
+  admins_path: "/app/config/admins.json"
+
+api:
+  token: "sirius-rating-system-api-token-2025"
