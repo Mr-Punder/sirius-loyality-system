@@ -32,7 +32,9 @@ type StorageConfig struct {
 }
 
 type AdminConfig struct {
-	JWTSecret string `yaml:"jwt_secret"` // Секретный ключ для JWT-токенов
+	JWTSecret  string `yaml:"jwt_secret"`  // Секретный ключ для JWT-токенов
+	StaticDir  string `yaml:"static_dir"`  // Путь к директории со статическими файлами админки
+	AdminsPath string `yaml:"admins_path"` // Путь к файлу со списком администраторов
 }
 
 type APIConfig struct {
@@ -101,6 +103,23 @@ func LoadConfig() (*Config, error) {
 		config.Storage.DataPath = storageDataPath
 	}
 
+	// Переопределение значений из переменных окружения, если они установлены
+	if envMigrationsPath := os.Getenv("MIGRATIONS_PATH"); envMigrationsPath != "" {
+		config.Storage.MigrationsPath = envMigrationsPath
+	}
+
+	if envDBPath := os.Getenv("DB_PATH"); envDBPath != "" {
+		config.Storage.DBPath = envDBPath
+	}
+
+	if envStaticDir := os.Getenv("ADMIN_STATIC_DIR"); envStaticDir != "" {
+		config.Admin.StaticDir = envStaticDir
+	}
+
+	if envAdminsPath := os.Getenv("ADMIN_ADMINS_PATH"); envAdminsPath != "" {
+		config.Admin.AdminsPath = envAdminsPath
+	}
+
 	// Установка значений по умолчанию, если они не заданы
 	if config.Storage.Type == "" {
 		config.Storage.Type = "file"
@@ -121,6 +140,15 @@ func LoadConfig() (*Config, error) {
 
 	if config.Log.MaxAge == 0 {
 		config.Log.MaxAge = 30 // 30 дней по умолчанию
+	}
+
+	// Установка значений по умолчанию для админки
+	if config.Admin.StaticDir == "" {
+		config.Admin.StaticDir = "./static/admin"
+	}
+
+	if config.Admin.AdminsPath == "" {
+		config.Admin.AdminsPath = "./cmd/telegrambot/admin/admins.json"
 	}
 
 	return config, nil

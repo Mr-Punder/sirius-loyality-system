@@ -23,10 +23,12 @@ storage:
 
   # Параметры для SQLite
   db_path: "data/loyality_system.db"
-  migrations_path: "../../../migrations/sqlite"
+  migrations_path: "./migrations/sqlite"
 
 admin:
   jwt_secret: "sirius-rating-system-secret-key-2025"
+  static_dir: "./static/admin"
+  admins_path: "./cmd/telegrambot/admin/admins.json"
 
 api:
   token: "sirius-rating-system-api-token-2025"

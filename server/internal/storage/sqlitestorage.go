@@ -65,7 +65,7 @@ func (s *SQLiteStorage) runMigrations(db *sql.DB, migrationsPath string) error {
 
 	// Создаем экземпляр миграции
 	m, err := migrate.NewWithDatabaseInstance(
-		fmt.Sprintf("file://%s", migrationsPath),
+		fmt.Sprintf("file:%s", migrationsPath),
 		"sqlite3", driver)
 	if err != nil {
 		return fmt.Errorf("failed to create migration instance: %w", err)

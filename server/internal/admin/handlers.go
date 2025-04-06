@@ -97,10 +97,18 @@ func NewAdminHandler(store storage.Storage, logger logger.Logger, dataDir string
 	passwordMgr := NewPasswordManager(dataDir)
 	jwtManager := NewJWTManager(jwtSecret)
 
-	// Получаем абсолютный путь к директории проекта
-	projectDir := "/Users/goomer125/Documents/sirius-rating-system"
-	staticDir := projectDir + "/server/static/admin"
-	adminsPath := filepath.Join(projectDir, "server", "cmd", "telegrambot", "admin", "admins.json")
+	// Получаем пути из переменных окружения или используем значения по умолчанию
+	staticDir := os.Getenv("ADMIN_STATIC_DIR")
+	if staticDir == "" {
+		staticDir = "./static/admin"
+	}
+
+	adminsPath := os.Getenv("ADMIN_ADMINS_PATH")
+	if adminsPath == "" {
+		adminsPath = "./cmd/telegrambot/admin/admins.json"
+	}
+
+	logger.Infof("Используем пути: staticDir=%s, adminsPath=%s", staticDir, adminsPath)
 
 	handler := &AdminHandler{
 		store:       store,
