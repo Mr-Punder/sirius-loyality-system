@@ -11,5 +11,5 @@ storage:
 
 logger:
   level: "info"
-  file: "/app/logs/server.log"
-  error_file: "/app/logs/server_error.log"
+  path: "/app/logs/server.log"
+  error_path: "/app/logs/server_error.log"
