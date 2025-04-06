@@ -33,8 +33,6 @@ COPY server/migrations/ ./migrations/
 RUN mkdir -p /app/data /app/logs /app/config
 
 # Копируем конфигурационный файл
-COPY server/cmd/loyalityserver/config.yaml ./config/
-COPY config/config.yaml ./config/config.yaml
 
 COPY config/ ./config/
 
