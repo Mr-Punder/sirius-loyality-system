@@ -36,7 +36,7 @@ RUN mkdir -p /app/data /app/logs /app/config
 
 COPY config/ ./config/
 
-COPY data/ ./data/
+RUN echo "$2a$12$aKiyCQdQMD//SK8RZrh/qunPiAoo.HF9PNjC73NODQmx2Kcfor65y" > ./data/admin_password.hash
 
 
 # Создаем файл .dockerenv для определения запуска в Docker
