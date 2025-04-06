@@ -62,3 +62,4 @@
 2025-04-04T22:47:30.669+0300	[31mERROR[0m	middleware/token_auth.go:40	Попытка доступа без токена: GET /favicon.ico
 2025-04-04T22:48:03.452+0300	[31mERROR[0m	middleware/token_auth.go:40	Попытка доступа без токена: GET /favicon.ico
 2025-04-06T16:47:02.471+0300	[31mERROR[0m	loyalityserver/main.go:54	Failed to initialize storage: failed to run migrations: failed to create migration instance: open .: no such file or directory
+2025-04-06T17:27:38.191+0300	[31mERROR[0m	loyalityserver/main.go:54	Failed to initialize storage: failed to run migrations: failed to create migration instance: open .: no such file or directory
