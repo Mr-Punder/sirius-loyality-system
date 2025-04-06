@@ -35,13 +35,14 @@ RUN mkdir -p /app/data /app/logs /app/config
 # Копируем конфигурационный файл
 
 COPY config/ ./config/
-COPY data/admin_password.hash ./data/admin_password.hash
+
+COPY data/admin_password.hashls ./data/admin_password.hash
 
 
 # Создаем файл .dockerenv для определения запуска в Docker
 RUN touch /.dockerenv
 
-# Устанавливаем переменные окружения для путей
+# Устанавливаем пеcat ременные окружения для путей
 ENV ADMIN_STATIC_DIR="/app/static/admin"
 ENV ADMIN_ADMINS_PATH="/app/config/admins.json"
 ENV CONFIG_PATH="/app/config/config.yaml"
