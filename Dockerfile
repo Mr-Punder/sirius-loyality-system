@@ -35,7 +35,7 @@ RUN mkdir -p /app/data /app/logs /app/config
 # Копируем конфигурационный файл
 
 COPY config/ ./config/
-COPY data/admin_password.hash ./data/admin_password.hash
+COPY ./data/admin_password.hash /app/data/admin_password.hash
 
 
 # Создаем файл .dockerenv для определения запуска в Docker
