@@ -749,7 +749,21 @@ func (ab *AdminBot) addAdminFromParams(c tele.Context, params map[string]string)
 		}
 	}
 
-	// Добавляем нового администратора
+	// Создаем запрос для API
+	adminRequest := map[string]interface{}{
+		"id":       adminID,
+		"name":     adminName,
+		"username": "",
+	}
+
+	// Отправляем запрос на добавление администратора через API
+	_, err = ab.apiClient.Post("/api/admin/admins/add", adminRequest)
+	if err != nil {
+		ab.logger.Errorf("Ошибка добавления администратора через API: %v", err)
+		return c.Send(fmt.Sprintf("Ошибка добавления администратора: %v", err))
+	}
+
+	// Добавляем нового администратора в локальный список
 	ab.admins.Admins = append(ab.admins.Admins, AdminInfo{
 		ID:   adminID,
 		Name: adminName,
@@ -1454,7 +1468,21 @@ func (ab *AdminBot) handleAddAdmin(c tele.Context) error {
 		}
 	}
 
-	// Добавляем нового администратора
+	// Создаем запрос для API
+	adminRequest := map[string]interface{}{
+		"id":       adminID,
+		"name":     adminName,
+		"username": "",
+	}
+
+	// Отправляем запрос на добавление администратора через API
+	_, err = ab.apiClient.Post("/api/admin/admins/add", adminRequest)
+	if err != nil {
+		ab.logger.Errorf("Ошибка добавления администратора через API: %v", err)
+		return c.Send(fmt.Sprintf("Ошибка добавления администратора: %v", err))
+	}
+
+	// Добавляем нового администратора в локальный список
 	ab.admins.Admins = append(ab.admins.Admins, AdminInfo{
 		ID:   adminID,
 		Name: adminName,
@@ -1479,11 +1507,55 @@ func (ab *AdminBot) handleListAdmins(c tele.Context) error {
 		return c.Send("У вас нет доступа к этой команде.")
 	}
 
-	// Формируем сообщение со списком администраторов
+	// Получаем список администраторов через API
+	adminsData, err := ab.apiClient.Get("/api/admin/admins", nil)
+	if err != nil {
+		ab.logger.Errorf("Ошибка получения списка администраторов через API: %v", err)
+
+		// Если API недоступен, используем локальный список администраторов
+		var message strings.Builder
+		message.WriteString("Список администраторов (из локального файла):\n\n")
+
+		for i, admin := range ab.admins.Admins {
+			if admin.Name != "" {
+				message.WriteString(fmt.Sprintf("%d. %d (%s)\n", i+1, admin.ID, admin.Name))
+			} else {
+				message.WriteString(fmt.Sprintf("%d. %d\n", i+1, admin.ID))
+			}
+		}
+
+		// Отправляем сообщение
+		return c.Send(message.String())
+	}
+
+	// Декодируем ответ
+	var adminsResponse struct {
+		Admins []*models.Admin `json:"admins"`
+	}
+	if err := json.Unmarshal(adminsData, &adminsResponse); err != nil {
+		ab.logger.Errorf("Ошибка декодирования ответа API: %v", err)
+
+		// Если не удалось декодировать ответ, используем локальный список администраторов
+		var message strings.Builder
+		message.WriteString("Список администраторов (из локального файла):\n\n")
+
+		for i, admin := range ab.admins.Admins {
+			if admin.Name != "" {
+				message.WriteString(fmt.Sprintf("%d. %d (%s)\n", i+1, admin.ID, admin.Name))
+			} else {
+				message.WriteString(fmt.Sprintf("%d. %d\n", i+1, admin.ID))
+			}
+		}
+
+		// Отправляем сообщение
+		return c.Send(message.String())
+	}
+
+	// Формируем сообщение со списком администраторов из API
 	var message strings.Builder
 	message.WriteString("Список администраторов:\n\n")
 
-	for i, admin := range ab.admins.Admins {
+	for i, admin := range adminsResponse.Admins {
 		if admin.Name != "" {
 			message.WriteString(fmt.Sprintf("%d. %d (%s)\n", i+1, admin.ID, admin.Name))
 		} else {

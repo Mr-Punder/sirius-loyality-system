@@ -96,6 +96,12 @@ func main() {
 	var storeErr error
 
 	switch conf.Storage.Type {
+	case "sqlite":
+		zapLogger.Info("Инициализация SQLite хранилища")
+		store, storeErr = storage.NewSQLiteStorage(conf.Storage.DBPath, conf.Storage.MigrationsPath)
+	case "postgres":
+		zapLogger.Info("Инициализация PostgreSQL хранилища")
+		store, storeErr = storage.NewPgStorage(conf.Storage.ConnectionString, conf.Storage.MigrationsPath)
 	case "file":
 		zapLogger.Info("Инициализация файлового хранилища")
 		store, storeErr = storage.NewFilestorage(conf.Storage.DataPath)

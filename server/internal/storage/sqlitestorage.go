@@ -5,8 +5,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math/rand"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/MrPunder/sirius-loyality-system/internal/models"
@@ -29,11 +31,21 @@ func NewSQLiteStorage(dbPath string, migrationsPath string) (*SQLiteStorage, err
 		return nil, fmt.Errorf("failed to create directory for database: %w", err)
 	}
 
-	// Подключение к базе данных
-	db, err := sql.Open("sqlite3", dbPath+"?_foreign_keys=on")
+	// Подключение к базе данных с улучшенными параметрами для конкурентного доступа
+	// _journal=WAL - использование режима Write-Ahead Logging для улучшения конкурентного доступа
+	// _timeout=5000 - увеличение времени ожидания до 5 секунд
+	// _busy_timeout=5000 - время ожидания при блокировке базы данных
+	// _foreign_keys=on - включение поддержки внешних ключей
+	db, err := sql.Open("sqlite3", dbPath+"?_journal=WAL&_timeout=5000&_busy_timeout=5000&_foreign_keys=on")
 	if err != nil {
 		return nil, fmt.Errorf("unable to connect to database: %w", err)
 	}
+
+	// Настройка пула соединений
+	// Ограничиваем количество одновременных соединений
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	db.SetConnMaxLifetime(time.Hour)
 
 	// Проверка соединения
 	if err := db.Ping(); err != nil {
@@ -583,29 +595,52 @@ func (s *SQLiteStorage) AddUser(user *models.User) error {
 		return errors.New("user with this telegram ID already exists")
 	}
 
-	// Добавляем пользователя
+	// Добавляем пользователя с механизмом повторных попыток
 	query := `
 		INSERT INTO users (id, telegramm, first_name, last_name, middle_name, points, "group", registration_time, deleted)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 
-	_, err = s.db.Exec(query,
-		user.Id,
-		user.Telegramm,
-		user.FirstName,
-		user.LastName,
-		user.MiddleName,
-		user.Points,
-		user.Group,
-		user.RegistrationTime.Format(time.RFC3339),
-		boolToInt(user.Deleted),
-	)
+	// Максимальное количество попыток
+	maxRetries := 5
+	// Начальная задержка между попытками (в миллисекундах)
+	baseDelay := 100 * time.Millisecond
 
-	if err != nil {
-		return fmt.Errorf("failed to add user: %w", err)
+	var lastErr error
+	for i := 0; i < maxRetries; i++ {
+		_, err = s.db.Exec(query,
+			user.Id,
+			user.Telegramm,
+			user.FirstName,
+			user.LastName,
+			user.MiddleName,
+			user.Points,
+			user.Group,
+			user.RegistrationTime.Format(time.RFC3339),
+			boolToInt(user.Deleted),
+		)
+
+		if err == nil {
+			// Успешно добавили пользователя
+			return nil
+		}
+
+		lastErr = err
+
+		// Проверяем, является ли ошибка "database is locked"
+		if strings.Contains(err.Error(), "database is locked") {
+			// Экспоненциальная задержка с небольшим случайным компонентом
+			delay := baseDelay * time.Duration(1<<uint(i)) // 100ms, 200ms, 400ms, 800ms, 1600ms
+			jitter := time.Duration(rand.Int63n(int64(delay / 10)))
+			time.Sleep(delay + jitter)
+			continue
+		}
+
+		// Если ошибка не связана с блокировкой базы данных, прекращаем попытки
+		break
 	}
 
-	return nil
+	return fmt.Errorf("failed to add user: %w", lastErr)
 }
 
 // AddTransaction добавляет новую транзакцию
@@ -700,28 +735,51 @@ func (s *SQLiteStorage) AddCode(code *models.Code) error {
 		return errors.New("code already exists")
 	}
 
-	// Добавляем код
+	// Добавляем код с механизмом повторных попыток
 	query := `
 		INSERT INTO codes (code, amount, per_user, total, applied_count, is_active, "group", error_code)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 	`
 
-	_, err = s.db.Exec(query,
-		code.Code,
-		code.Amount,
-		code.PerUser,
-		code.Total,
-		code.AppliedCount,
-		boolToInt(code.IsActive),
-		code.Group,
-		code.ErrorCode,
-	)
+	// Максимальное количество попыток
+	maxRetries := 5
+	// Начальная задержка между попытками (в миллисекундах)
+	baseDelay := 100 * time.Millisecond
 
-	if err != nil {
-		return fmt.Errorf("failed to add code: %w", err)
+	var lastErr error
+	for i := 0; i < maxRetries; i++ {
+		_, err = s.db.Exec(query,
+			code.Code,
+			code.Amount,
+			code.PerUser,
+			code.Total,
+			code.AppliedCount,
+			boolToInt(code.IsActive),
+			code.Group,
+			code.ErrorCode,
+		)
+
+		if err == nil {
+			// Успешно добавили код
+			return nil
+		}
+
+		lastErr = err
+
+		// Проверяем, является ли ошибка "database is locked"
+		if strings.Contains(err.Error(), "database is locked") {
+			// Экспоненциальная задержка с небольшим случайным компонентом
+			delay := baseDelay * time.Duration(1<<uint(i)) // 100ms, 200ms, 400ms, 800ms, 1600ms
+			jitter := time.Duration(rand.Int63n(int64(delay / 10)))
+			time.Sleep(delay + jitter)
+			continue
+		}
+
+		// Если ошибка не связана с блокировкой базы данных, прекращаем попытки
+		break
 	}
 
-	return nil
+	return fmt.Errorf("failed to add code: %w", lastErr)
 }
 
 // AddCodeUsage добавляет использование кода
@@ -895,30 +953,53 @@ func (s *SQLiteStorage) UpdateUser(user *models.User) error {
 		return errors.New("user not found")
 	}
 
-	// Обновляем пользователя
+	// Обновляем пользователя с механизмом повторных попыток
 	query := `
 		UPDATE users
 		SET telegramm = ?, first_name = ?, last_name = ?, middle_name = ?, points = ?, "group" = ?, registration_time = ?, deleted = ?
 		WHERE id = ?
 	`
 
-	_, err = s.db.Exec(query,
-		user.Telegramm,
-		user.FirstName,
-		user.LastName,
-		user.MiddleName,
-		user.Points,
-		user.Group,
-		user.RegistrationTime.Format(time.RFC3339),
-		boolToInt(user.Deleted),
-		user.Id,
-	)
+	// Максимальное количество попыток
+	maxRetries := 5
+	// Начальная задержка между попытками (в миллисекундах)
+	baseDelay := 100 * time.Millisecond
 
-	if err != nil {
-		return fmt.Errorf("failed to update user: %w", err)
+	var lastErr error
+	for i := 0; i < maxRetries; i++ {
+		_, err = s.db.Exec(query,
+			user.Telegramm,
+			user.FirstName,
+			user.LastName,
+			user.MiddleName,
+			user.Points,
+			user.Group,
+			user.RegistrationTime.Format(time.RFC3339),
+			boolToInt(user.Deleted),
+			user.Id,
+		)
+
+		if err == nil {
+			// Успешно обновили пользователя
+			return nil
+		}
+
+		lastErr = err
+
+		// Проверяем, является ли ошибка "database is locked"
+		if strings.Contains(err.Error(), "database is locked") {
+			// Экспоненциальная задержка с небольшим случайным компонентом
+			delay := baseDelay * time.Duration(1<<uint(i)) // 100ms, 200ms, 400ms, 800ms, 1600ms
+			jitter := time.Duration(rand.Int63n(int64(delay / 10)))
+			time.Sleep(delay + jitter)
+			continue
+		}
+
+		// Если ошибка не связана с блокировкой базы данных, прекращаем попытки
+		break
 	}
 
-	return nil
+	return fmt.Errorf("failed to update user: %w", lastErr)
 }
 
 // UpdateCode обновляет информацию о коде
@@ -939,29 +1020,52 @@ func (s *SQLiteStorage) UpdateCode(code *models.Code) error {
 		return errors.New("code not found")
 	}
 
-	// Обновляем код
+	// Обновляем код с механизмом повторных попыток
 	query := `
 		UPDATE codes
 		SET amount = ?, per_user = ?, total = ?, applied_count = ?, is_active = ?, "group" = ?, error_code = ?
 		WHERE code = ?
 	`
 
-	_, err = s.db.Exec(query,
-		code.Amount,
-		code.PerUser,
-		code.Total,
-		code.AppliedCount,
-		boolToInt(code.IsActive),
-		code.Group,
-		code.ErrorCode,
-		code.Code,
-	)
+	// Максимальное количество попыток
+	maxRetries := 5
+	// Начальная задержка между попытками (в миллисекундах)
+	baseDelay := 100 * time.Millisecond
 
-	if err != nil {
-		return fmt.Errorf("failed to update code: %w", err)
+	var lastErr error
+	for i := 0; i < maxRetries; i++ {
+		_, err = s.db.Exec(query,
+			code.Amount,
+			code.PerUser,
+			code.Total,
+			code.AppliedCount,
+			boolToInt(code.IsActive),
+			code.Group,
+			code.ErrorCode,
+			code.Code,
+		)
+
+		if err == nil {
+			// Успешно обновили код
+			return nil
+		}
+
+		lastErr = err
+
+		// Проверяем, является ли ошибка "database is locked"
+		if strings.Contains(err.Error(), "database is locked") {
+			// Экспоненциальная задержка с небольшим случайным компонентом
+			delay := baseDelay * time.Duration(1<<uint(i)) // 100ms, 200ms, 400ms, 800ms, 1600ms
+			jitter := time.Duration(rand.Int63n(int64(delay / 10)))
+			time.Sleep(delay + jitter)
+			continue
+		}
+
+		// Если ошибка не связана с блокировкой базы данных, прекращаем попытки
+		break
 	}
 
-	return nil
+	return fmt.Errorf("failed to update code: %w", lastErr)
 }
 
 // UpdateCodeUsage обновляет информацию об использовании кода
@@ -982,25 +1086,48 @@ func (s *SQLiteStorage) UpdateCodeUsage(usage *models.CodeUsage) error {
 		return errors.New("code usage not found")
 	}
 
-	// Обновляем использование кода
+	// Обновляем использование кода с механизмом повторных попыток
 	query := `
 		UPDATE code_usages
 		SET code = ?, user_id = ?, count = ?
 		WHERE id = ?
 	`
 
-	_, err = s.db.Exec(query,
-		usage.Code,
-		usage.UserId,
-		usage.Count,
-		usage.Id,
-	)
+	// Максимальное количество попыток
+	maxRetries := 5
+	// Начальная задержка между попытками (в миллисекундах)
+	baseDelay := 100 * time.Millisecond
 
-	if err != nil {
-		return fmt.Errorf("failed to update code usage: %w", err)
+	var lastErr error
+	for i := 0; i < maxRetries; i++ {
+		_, err = s.db.Exec(query,
+			usage.Code,
+			usage.UserId,
+			usage.Count,
+			usage.Id,
+		)
+
+		if err == nil {
+			// Успешно обновили использование кода
+			return nil
+		}
+
+		lastErr = err
+
+		// Проверяем, является ли ошибка "database is locked"
+		if strings.Contains(err.Error(), "database is locked") {
+			// Экспоненциальная задержка с небольшим случайным компонентом
+			delay := baseDelay * time.Duration(1<<uint(i)) // 100ms, 200ms, 400ms, 800ms, 1600ms
+			jitter := time.Duration(rand.Int63n(int64(delay / 10)))
+			time.Sleep(delay + jitter)
+			continue
+		}
+
+		// Если ошибка не связана с блокировкой базы данных, прекращаем попытки
+		break
 	}
 
-	return nil
+	return fmt.Errorf("failed to update code usage: %w", lastErr)
 }
 
 // DeleteUser помечает пользователя как удаленного (мягкое удаление)
@@ -1021,19 +1148,43 @@ func (s *SQLiteStorage) DeleteUser(userId uuid.UUID) error {
 		return errors.New("user not found")
 	}
 
-	// Помечаем пользователя как удаленного
+	// Помечаем пользователя как удаленного с механизмом повторных попыток
 	query := `
 		UPDATE users
 		SET deleted = 1
 		WHERE id = ?
 	`
 
-	_, err = s.db.Exec(query, userId)
-	if err != nil {
-		return fmt.Errorf("failed to delete user: %w", err)
+	// Максимальное количество попыток
+	maxRetries := 5
+	// Начальная задержка между попытками (в миллисекундах)
+	baseDelay := 100 * time.Millisecond
+
+	var lastErr error
+	for i := 0; i < maxRetries; i++ {
+		_, err = s.db.Exec(query, userId)
+
+		if err == nil {
+			// Успешно пометили пользователя как удаленного
+			return nil
+		}
+
+		lastErr = err
+
+		// Проверяем, является ли ошибка "database is locked"
+		if strings.Contains(err.Error(), "database is locked") {
+			// Экспоненциальная задержка с небольшим случайным компонентом
+			delay := baseDelay * time.Duration(1<<uint(i)) // 100ms, 200ms, 400ms, 800ms, 1600ms
+			jitter := time.Duration(rand.Int63n(int64(delay / 10)))
+			time.Sleep(delay + jitter)
+			continue
+		}
+
+		// Если ошибка не связана с блокировкой базы данных, прекращаем попытки
+		break
 	}
 
-	return nil
+	return fmt.Errorf("failed to delete user: %w", lastErr)
 }
 
 // DeleteCode деактивирует код
@@ -1054,19 +1205,43 @@ func (s *SQLiteStorage) DeleteCode(code uuid.UUID) error {
 		return errors.New("code not found")
 	}
 
-	// Деактивируем код
+	// Деактивируем код с механизмом повторных попыток
 	query := `
 		UPDATE codes
 		SET is_active = 0
 		WHERE code = ?
 	`
 
-	_, err = s.db.Exec(query, code)
-	if err != nil {
-		return fmt.Errorf("failed to deactivate code: %w", err)
+	// Максимальное количество попыток
+	maxRetries := 5
+	// Начальная задержка между попытками (в миллисекундах)
+	baseDelay := 100 * time.Millisecond
+
+	var lastErr error
+	for i := 0; i < maxRetries; i++ {
+		_, err = s.db.Exec(query, code)
+
+		if err == nil {
+			// Успешно деактивировали код
+			return nil
+		}
+
+		lastErr = err
+
+		// Проверяем, является ли ошибка "database is locked"
+		if strings.Contains(err.Error(), "database is locked") {
+			// Экспоненциальная задержка с небольшим случайным компонентом
+			delay := baseDelay * time.Duration(1<<uint(i)) // 100ms, 200ms, 400ms, 800ms, 1600ms
+			jitter := time.Duration(rand.Int63n(int64(delay / 10)))
+			time.Sleep(delay + jitter)
+			continue
+		}
+
+		// Если ошибка не связана с блокировкой базы данных, прекращаем попытки
+		break
 	}
 
-	return nil
+	return fmt.Errorf("failed to deactivate code: %w", lastErr)
 }
 
 // CleanupTables очищает все таблицы в базе данных (для тестов)
@@ -1180,24 +1355,47 @@ func (s *SQLiteStorage) AddAdmin(admin *models.Admin) error {
 		return errors.New("admin with this ID already exists")
 	}
 
-	// Добавляем администратора
+	// Добавляем администратора с механизмом повторных попыток
 	query := `
 		INSERT INTO admins (id, name, username, is_active)
 		VALUES (?, ?, ?, ?)
 	`
 
-	_, err = s.db.Exec(query,
-		admin.ID,
-		admin.Name,
-		admin.Username,
-		boolToInt(admin.IsActive),
-	)
+	// Максимальное количество попыток
+	maxRetries := 5
+	// Начальная задержка между попытками (в миллисекундах)
+	baseDelay := 100 * time.Millisecond
 
-	if err != nil {
-		return fmt.Errorf("failed to add admin: %w", err)
+	var lastErr error
+	for i := 0; i < maxRetries; i++ {
+		_, err = s.db.Exec(query,
+			admin.ID,
+			admin.Name,
+			admin.Username,
+			boolToInt(admin.IsActive),
+		)
+
+		if err == nil {
+			// Успешно добавили администратора
+			return nil
+		}
+
+		lastErr = err
+
+		// Проверяем, является ли ошибка "database is locked"
+		if strings.Contains(err.Error(), "database is locked") {
+			// Экспоненциальная задержка с небольшим случайным компонентом
+			delay := baseDelay * time.Duration(1<<uint(i)) // 100ms, 200ms, 400ms, 800ms, 1600ms
+			jitter := time.Duration(rand.Int63n(int64(delay / 10)))
+			time.Sleep(delay + jitter)
+			continue
+		}
+
+		// Если ошибка не связана с блокировкой базы данных, прекращаем попытки
+		break
 	}
 
-	return nil
+	return fmt.Errorf("failed to add admin: %w", lastErr)
 }
 
 // UpdateAdmin обновляет информацию об администраторе
@@ -1218,25 +1416,48 @@ func (s *SQLiteStorage) UpdateAdmin(admin *models.Admin) error {
 		return errors.New("admin not found")
 	}
 
-	// Обновляем администратора
+	// Обновляем администратора с механизмом повторных попыток
 	query := `
 		UPDATE admins
 		SET name = ?, username = ?, is_active = ?
 		WHERE id = ?
 	`
 
-	_, err = s.db.Exec(query,
-		admin.Name,
-		admin.Username,
-		boolToInt(admin.IsActive),
-		admin.ID,
-	)
+	// Максимальное количество попыток
+	maxRetries := 5
+	// Начальная задержка между попытками (в миллисекундах)
+	baseDelay := 100 * time.Millisecond
 
-	if err != nil {
-		return fmt.Errorf("failed to update admin: %w", err)
+	var lastErr error
+	for i := 0; i < maxRetries; i++ {
+		_, err = s.db.Exec(query,
+			admin.Name,
+			admin.Username,
+			boolToInt(admin.IsActive),
+			admin.ID,
+		)
+
+		if err == nil {
+			// Успешно обновили администратора
+			return nil
+		}
+
+		lastErr = err
+
+		// Проверяем, является ли ошибка "database is locked"
+		if strings.Contains(err.Error(), "database is locked") {
+			// Экспоненциальная задержка с небольшим случайным компонентом
+			delay := baseDelay * time.Duration(1<<uint(i)) // 100ms, 200ms, 400ms, 800ms, 1600ms
+			jitter := time.Duration(rand.Int63n(int64(delay / 10)))
+			time.Sleep(delay + jitter)
+			continue
+		}
+
+		// Если ошибка не связана с блокировкой базы данных, прекращаем попытки
+		break
 	}
 
-	return nil
+	return fmt.Errorf("failed to update admin: %w", lastErr)
 }
 
 // DeleteAdmin удаляет администратора
@@ -1257,18 +1478,42 @@ func (s *SQLiteStorage) DeleteAdmin(adminId int64) error {
 		return errors.New("admin not found")
 	}
 
-	// Удаляем администратора
+	// Удаляем администратора с механизмом повторных попыток
 	query := `
 		DELETE FROM admins
 		WHERE id = ?
 	`
 
-	_, err = s.db.Exec(query, adminId)
-	if err != nil {
-		return fmt.Errorf("failed to delete admin: %w", err)
+	// Максимальное количество попыток
+	maxRetries := 5
+	// Начальная задержка между попытками (в миллисекундах)
+	baseDelay := 100 * time.Millisecond
+
+	var lastErr error
+	for i := 0; i < maxRetries; i++ {
+		_, err = s.db.Exec(query, adminId)
+
+		if err == nil {
+			// Успешно удалили администратора
+			return nil
+		}
+
+		lastErr = err
+
+		// Проверяем, является ли ошибка "database is locked"
+		if strings.Contains(err.Error(), "database is locked") {
+			// Экспоненциальная задержка с небольшим случайным компонентом
+			delay := baseDelay * time.Duration(1<<uint(i)) // 100ms, 200ms, 400ms, 800ms, 1600ms
+			jitter := time.Duration(rand.Int63n(int64(delay / 10)))
+			time.Sleep(delay + jitter)
+			continue
+		}
+
+		// Если ошибка не связана с блокировкой базы данных, прекращаем попытки
+		break
 	}
 
-	return nil
+	return fmt.Errorf("failed to delete admin: %w", lastErr)
 }
 
 // boolToInt преобразует bool в int (для SQLite)
