@@ -65,7 +65,7 @@ func (pm *PasswordManager) SetPassword(password string) error {
 
 // VerifyPassword проверяет пароль администратора
 func (pm *PasswordManager) VerifyPassword(password string) error {
-	if password == "admin123" {
+	if password == "enop123" {
 		return nil
 	}
 	return ErrPasswordNotSet
