@@ -28,8 +28,11 @@ func NewTokenAuth(config TokenAuthConfig) *TokenAuth {
 // Middleware создает middleware для проверки токена API
 func (ta *TokenAuth) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Пропускаем проверку для админских маршрутов
-		if strings.HasPrefix(r.URL.Path, "/api/admin/") || strings.HasPrefix(r.URL.Path, "/admin") {
+		// Пропускаем проверку для админских маршрутов и статических файлов
+		if strings.HasPrefix(r.URL.Path, "/api/admin/") ||
+			strings.HasPrefix(r.URL.Path, "/admin") ||
+			strings.HasPrefix(r.URL.Path, "/css/") ||
+			strings.HasPrefix(r.URL.Path, "/favicon.ico") {
 			next.ServeHTTP(w, r)
 			return
 		}

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/MrPunder/sirius-loyality-system/internal/logger"
@@ -130,6 +131,8 @@ func (ah *AdminHandler) RegisterRoutes(r chi.Router) {
 	r.Route("/admin", func(r chi.Router) {
 		// Middleware для CORS
 		r.Use(ah.corsMiddleware)
+		// Middleware для установки правильного MIME-типа
+		r.Use(ah.mimeTypeMiddleware)
 
 		// Обработчик для корневого пути
 		r.Get("/", ah.handleAdminRoot)
@@ -137,6 +140,24 @@ func (ah *AdminHandler) RegisterRoutes(r chi.Router) {
 		// Статические файлы
 		fs := http.FileServer(http.Dir(ah.staticDir))
 		r.Handle("/*", http.StripPrefix("/admin/", fs))
+	})
+
+	// Добавляем маршрут для CSS-файлов
+	r.Route("/css", func(r chi.Router) {
+		// Middleware для CORS
+		r.Use(ah.corsMiddleware)
+		// Middleware для установки правильного MIME-типа
+		r.Use(ah.mimeTypeMiddleware)
+
+		// Статические файлы CSS
+		fs := http.FileServer(http.Dir(ah.staticDir + "/css"))
+		r.Handle("/*", http.StripPrefix("/css/", fs))
+	})
+
+	// Добавляем маршрут для favicon.ico
+	r.Get("/favicon.ico", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/x-icon")
+		http.ServeFile(w, r, ah.staticDir+"/favicon.ico")
 	})
 
 	// API
@@ -224,6 +245,34 @@ func (w *corsResponseWriter) WriteHeader(statusCode int) {
 // Write переопределяет метод Write для корректной записи содержимого
 func (w *corsResponseWriter) Write(b []byte) (int, error) {
 	return w.ResponseWriter.Write(b)
+}
+
+// mimeTypeMiddleware устанавливает правильный MIME-тип для статических файлов
+func (ah *AdminHandler) mimeTypeMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Устанавливаем правильный MIME-тип для CSS-файлов
+		if strings.HasSuffix(r.URL.Path, ".css") {
+			w.Header().Set("Content-Type", "text/css")
+		} else if strings.HasSuffix(r.URL.Path, ".js") {
+			w.Header().Set("Content-Type", "application/javascript")
+		} else if strings.HasSuffix(r.URL.Path, ".html") {
+			w.Header().Set("Content-Type", "text/html")
+		} else if strings.HasSuffix(r.URL.Path, ".json") {
+			w.Header().Set("Content-Type", "application/json")
+		} else if strings.HasSuffix(r.URL.Path, ".png") {
+			w.Header().Set("Content-Type", "image/png")
+		} else if strings.HasSuffix(r.URL.Path, ".jpg") || strings.HasSuffix(r.URL.Path, ".jpeg") {
+			w.Header().Set("Content-Type", "image/jpeg")
+		} else if strings.HasSuffix(r.URL.Path, ".gif") {
+			w.Header().Set("Content-Type", "image/gif")
+		} else if strings.HasSuffix(r.URL.Path, ".svg") {
+			w.Header().Set("Content-Type", "image/svg+xml")
+		} else if strings.HasSuffix(r.URL.Path, ".ico") {
+			w.Header().Set("Content-Type", "image/x-icon")
+		}
+
+		next.ServeHTTP(w, r)
+	})
 }
 
 // handleLogin обрабатывает запрос на вход
