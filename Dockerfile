@@ -6,12 +6,12 @@ RUN apt-get update && apt-get install -y gcc libc6-dev
 WORKDIR /app
 COPY server/ ./
 RUN go mod download
-# Сборка основного сервера с CGO
-RUN GOOS=linux go build -o loyalityserver ./cmd/loyalityserver
+# Сборка основного сервера с CGO, статически связанного для Alpine
+RUN CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -ldflags="-linkmode external -extldflags -static" -o loyalityserver ./cmd/loyalityserver
 # Сборка пользовательского бота
-RUN go build -o userbot ./cmd/telegrambot/user
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o userbot ./cmd/telegrambot/user
 # Сборка административного бота
-RUN go build -o adminbot ./cmd/telegrambot/admin
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o adminbot ./cmd/telegrambot/admin
 
 FROM alpine:latest
 
