@@ -7,9 +7,9 @@ server:
 
 storage:
   type: "sqlite"
-  dsn: "server/cmd/loyalityserver/data/loyality_system.db"
+  dsn: "/app/data/loyality_system.db"
 
 logger:
   level: "info"
-  file: "server/cmd/loyalityserver/logs/server.log"
-  error_file: "server/cmd/loyalityserver/logs/server_error.log"
+  file: "/app/logs/server.log"
+  error_file: "/app/logs/server_error.log"
