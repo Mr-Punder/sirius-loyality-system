@@ -53,6 +53,14 @@ type CodeUsage struct {
 	Count  int       `json:"count"`
 }
 
+// Admin представляет информацию об администраторе
+type Admin struct {
+	ID       int64  `json:"id"`
+	Name     string `json:"name"`
+	Username string `json:"username,omitempty"`
+	IsActive bool   `json:"is_active"`
+}
+
 // GetCurrentTime возвращает текущее время
 func GetCurrentTime() time.Time {
 	return time.Now()

@@ -1095,6 +1095,182 @@ func (s *SQLiteStorage) CleanupTables(ctx context.Context) error {
 	return nil
 }
 
+// GetAdmin возвращает администратора по ID
+func (s *SQLiteStorage) GetAdmin(adminId int64) (*models.Admin, error) {
+	query := `
+		SELECT id, name, username, is_active
+		FROM admins
+		WHERE id = ?
+	`
+
+	var admin models.Admin
+	var isActive int
+	err := s.db.QueryRow(query, adminId).Scan(
+		&admin.ID,
+		&admin.Name,
+		&admin.Username,
+		&isActive,
+	)
+
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, errors.New("admin not found")
+		}
+		return nil, fmt.Errorf("failed to get admin: %w", err)
+	}
+
+	admin.IsActive = isActive == 1
+
+	return &admin, nil
+}
+
+// GetAllAdmins возвращает список всех администраторов
+func (s *SQLiteStorage) GetAllAdmins() ([]*models.Admin, error) {
+	query := `
+		SELECT id, name, username, is_active
+		FROM admins
+		ORDER BY id
+	`
+
+	rows, err := s.db.Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query admins: %w", err)
+	}
+	defer rows.Close()
+
+	var admins []*models.Admin
+	for rows.Next() {
+		var admin models.Admin
+		var isActive int
+		err := rows.Scan(
+			&admin.ID,
+			&admin.Name,
+			&admin.Username,
+			&isActive,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan admin: %w", err)
+		}
+		admin.IsActive = isActive == 1
+		admins = append(admins, &admin)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating admins: %w", err)
+	}
+
+	return admins, nil
+}
+
+// AddAdmin добавляет нового администратора
+func (s *SQLiteStorage) AddAdmin(admin *models.Admin) error {
+	// Проверяем, существует ли администратор с таким ID
+	checkQuery := `
+		SELECT COUNT(*)
+		FROM admins
+		WHERE id = ?
+	`
+	var count int
+	err := s.db.QueryRow(checkQuery, admin.ID).Scan(&count)
+	if err != nil {
+		return fmt.Errorf("failed to check existing admin: %w", err)
+	}
+
+	if count > 0 {
+		return errors.New("admin with this ID already exists")
+	}
+
+	// Добавляем администратора
+	query := `
+		INSERT INTO admins (id, name, username, is_active)
+		VALUES (?, ?, ?, ?)
+	`
+
+	_, err = s.db.Exec(query,
+		admin.ID,
+		admin.Name,
+		admin.Username,
+		boolToInt(admin.IsActive),
+	)
+
+	if err != nil {
+		return fmt.Errorf("failed to add admin: %w", err)
+	}
+
+	return nil
+}
+
+// UpdateAdmin обновляет информацию об администраторе
+func (s *SQLiteStorage) UpdateAdmin(admin *models.Admin) error {
+	// Проверяем, существует ли администратор
+	checkQuery := `
+		SELECT COUNT(*)
+		FROM admins
+		WHERE id = ?
+	`
+	var count int
+	err := s.db.QueryRow(checkQuery, admin.ID).Scan(&count)
+	if err != nil {
+		return fmt.Errorf("failed to check admin existence: %w", err)
+	}
+
+	if count == 0 {
+		return errors.New("admin not found")
+	}
+
+	// Обновляем администратора
+	query := `
+		UPDATE admins
+		SET name = ?, username = ?, is_active = ?
+		WHERE id = ?
+	`
+
+	_, err = s.db.Exec(query,
+		admin.Name,
+		admin.Username,
+		boolToInt(admin.IsActive),
+		admin.ID,
+	)
+
+	if err != nil {
+		return fmt.Errorf("failed to update admin: %w", err)
+	}
+
+	return nil
+}
+
+// DeleteAdmin удаляет администратора
+func (s *SQLiteStorage) DeleteAdmin(adminId int64) error {
+	// Проверяем, существует ли администратор
+	checkQuery := `
+		SELECT COUNT(*)
+		FROM admins
+		WHERE id = ?
+	`
+	var count int
+	err := s.db.QueryRow(checkQuery, adminId).Scan(&count)
+	if err != nil {
+		return fmt.Errorf("failed to check admin existence: %w", err)
+	}
+
+	if count == 0 {
+		return errors.New("admin not found")
+	}
+
+	// Удаляем администратора
+	query := `
+		DELETE FROM admins
+		WHERE id = ?
+	`
+
+	_, err = s.db.Exec(query, adminId)
+	if err != nil {
+		return fmt.Errorf("failed to delete admin: %w", err)
+	}
+
+	return nil
+}
+
 // boolToInt преобразует bool в int (для SQLite)
 func boolToInt(b bool) int {
 	if b {

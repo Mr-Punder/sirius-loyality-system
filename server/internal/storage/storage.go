@@ -34,4 +34,11 @@ type Storage interface {
 	// Методы для удаления данных
 	DeleteUser(userId uuid.UUID) error
 	DeleteCode(code uuid.UUID) error
+
+	// Методы для работы с администраторами
+	GetAdmin(adminId int64) (*models.Admin, error)
+	GetAllAdmins() ([]*models.Admin, error)
+	AddAdmin(admin *models.Admin) error
+	UpdateAdmin(admin *models.Admin) error
+	DeleteAdmin(adminId int64) error
 }

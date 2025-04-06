@@ -1034,5 +1034,190 @@ func (p *PgStorage) CleanupTables(ctx context.Context) error {
 		return fmt.Errorf("failed to clean users table: %w", err)
 	}
 
+	_, err = p.pool.Exec(ctx, "DELETE FROM admins")
+	if err != nil {
+		return fmt.Errorf("failed to clean admins table: %w", err)
+	}
+
+	return nil
+}
+
+// GetAdmin возвращает администратора по ID
+func (p *PgStorage) GetAdmin(adminId int64) (*models.Admin, error) {
+	ctx := context.Background()
+	query := `
+		SELECT id, name, username, is_active
+		FROM admins
+		WHERE id = $1
+	`
+
+	var admin models.Admin
+	err := p.pool.QueryRow(ctx, query, adminId).Scan(
+		&admin.ID,
+		&admin.Name,
+		&admin.Username,
+		&admin.IsActive,
+	)
+
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, errors.New("admin not found")
+		}
+		return nil, fmt.Errorf("failed to get admin: %w", err)
+	}
+
+	return &admin, nil
+}
+
+// GetAllAdmins возвращает список всех администраторов
+func (p *PgStorage) GetAllAdmins() ([]*models.Admin, error) {
+	ctx := context.Background()
+	query := `
+		SELECT id, name, username, is_active
+		FROM admins
+		WHERE is_active = true
+		ORDER BY id
+	`
+
+	rows, err := p.pool.Query(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query admins: %w", err)
+	}
+	defer rows.Close()
+
+	var admins []*models.Admin
+	for rows.Next() {
+		var admin models.Admin
+		err := rows.Scan(
+			&admin.ID,
+			&admin.Name,
+			&admin.Username,
+			&admin.IsActive,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan admin: %w", err)
+		}
+		admins = append(admins, &admin)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating admins: %w", err)
+	}
+
+	return admins, nil
+}
+
+// AddAdmin добавляет нового администратора
+func (p *PgStorage) AddAdmin(admin *models.Admin) error {
+	ctx := context.Background()
+
+	// Проверяем, существует ли администратор с таким ID
+	checkQuery := `
+		SELECT COUNT(*)
+		FROM admins
+		WHERE id = $1
+	`
+	var count int
+	err := p.pool.QueryRow(ctx, checkQuery, admin.ID).Scan(&count)
+	if err != nil {
+		return fmt.Errorf("failed to check existing admin: %w", err)
+	}
+
+	if count > 0 {
+		return errors.New("admin with this ID already exists")
+	}
+
+	// Добавляем администратора
+	query := `
+		INSERT INTO admins (id, name, username, is_active)
+		VALUES ($1, $2, $3, $4)
+	`
+
+	_, err = p.pool.Exec(ctx, query,
+		admin.ID,
+		admin.Name,
+		admin.Username,
+		admin.IsActive,
+	)
+
+	if err != nil {
+		return fmt.Errorf("failed to add admin: %w", err)
+	}
+
+	return nil
+}
+
+// UpdateAdmin обновляет информацию об администраторе
+func (p *PgStorage) UpdateAdmin(admin *models.Admin) error {
+	ctx := context.Background()
+
+	// Проверяем, существует ли администратор
+	checkQuery := `
+		SELECT COUNT(*)
+		FROM admins
+		WHERE id = $1
+	`
+	var count int
+	err := p.pool.QueryRow(ctx, checkQuery, admin.ID).Scan(&count)
+	if err != nil {
+		return fmt.Errorf("failed to check admin existence: %w", err)
+	}
+
+	if count == 0 {
+		return errors.New("admin not found")
+	}
+
+	// Обновляем администратора
+	query := `
+		UPDATE admins
+		SET name = $2, username = $3, is_active = $4
+		WHERE id = $1
+	`
+
+	_, err = p.pool.Exec(ctx, query,
+		admin.ID,
+		admin.Name,
+		admin.Username,
+		admin.IsActive,
+	)
+
+	if err != nil {
+		return fmt.Errorf("failed to update admin: %w", err)
+	}
+
+	return nil
+}
+
+// DeleteAdmin удаляет администратора
+func (p *PgStorage) DeleteAdmin(adminId int64) error {
+	ctx := context.Background()
+
+	// Проверяем, существует ли администратор
+	checkQuery := `
+		SELECT COUNT(*)
+		FROM admins
+		WHERE id = $1
+	`
+	var count int
+	err := p.pool.QueryRow(ctx, checkQuery, adminId).Scan(&count)
+	if err != nil {
+		return fmt.Errorf("failed to check admin existence: %w", err)
+	}
+
+	if count == 0 {
+		return errors.New("admin not found")
+	}
+
+	// Удаляем администратора
+	query := `
+		DELETE FROM admins
+		WHERE id = $1
+	`
+
+	_, err = p.pool.Exec(ctx, query, adminId)
+	if err != nil {
+		return fmt.Errorf("failed to delete admin: %w", err)
+	}
+
 	return nil
 }

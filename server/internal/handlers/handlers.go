@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/MrPunder/sirius-loyality-system/internal/logger"
@@ -57,6 +58,11 @@ func NewRouter(logger logger.Logger, storage storage.Storage) chi.Router {
 		r.Route("/transactions", func(r chi.Router) {
 			r.Get("/", handler.GetTransactionsHandler)
 			r.Post("/", handler.CreateTransactionHandler)
+		})
+
+		// Маршруты для администраторов
+		r.Route("/admins", func(r chi.Router) {
+			r.Get("/check/{id}", handler.CheckAdminHandler)
 		})
 
 		// Обработчик по умолчанию для неправильных запросов
@@ -795,6 +801,40 @@ func (h *Handler) GetTransactionsHandler(w http.ResponseWriter, r *http.Request)
 	if err := json.NewEncoder(w).Encode(response); err != nil {
 		h.logger.Errorf("Error encoding response: %v", err)
 	}
+}
+
+// CheckAdminHandler проверяет, является ли пользователь администратором
+func (h *Handler) CheckAdminHandler(w http.ResponseWriter, r *http.Request) {
+	h.logger.Info("Entered CheckAdminHandler")
+
+	// Получаем ID пользователя из URL
+	idStr := chi.URLParam(r, "id")
+	if idStr == "" {
+		h.logger.Error("ID пользователя не указан")
+		http.Error(w, "ID пользователя не указан", http.StatusBadRequest)
+		return
+	}
+
+	// Парсим ID пользователя
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		h.logger.Errorf("Неверный формат ID пользователя: %v", err)
+		http.Error(w, "Неверный формат ID пользователя", http.StatusBadRequest)
+		return
+	}
+
+	// Проверяем, является ли пользователь администратором
+	admin, err := h.storage.GetAdmin(id)
+	if err != nil {
+		// Если пользователь не найден, возвращаем false
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]bool{"is_admin": false})
+		return
+	}
+
+	// Проверяем, активен ли администратор
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]bool{"is_admin": admin.IsActive})
 }
 
 // CreateTransactionHandler создает новую транзакцию

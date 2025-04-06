@@ -18,6 +18,7 @@ const (
 	TransactionsFileName = "transactions.json"
 	CodesFileName        = "codes.json"
 	CodeUsagesFileName   = "code_usages.json"
+	AdminsFileName       = "admins.json"
 )
 
 // Filestorage реализует интерфейс Storage с хранением данных в файлах
@@ -26,6 +27,7 @@ type Filestorage struct {
 	transactions sync.Map // uuid.UUID -> *models.Transaction
 	codes        sync.Map // uuid.UUID -> *models.Code
 	codeUsages   sync.Map // uuid.UUID -> *models.CodeUsage
+	admins       sync.Map // int64 -> *models.Admin
 	dataDir      string   // Директория для хранения файлов данных
 }
 
@@ -68,6 +70,74 @@ func (fs *Filestorage) loadData() error {
 	// Загружаем использования кодов
 	if err := fs.loadCodeUsages(); err != nil {
 		return err
+	}
+
+	// Загружаем администраторов
+	if err := fs.loadAdmins(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// loadAdmins загружает администраторов из файла
+func (fs *Filestorage) loadAdmins() error {
+	filePath := filepath.Join(fs.dataDir, AdminsFileName)
+
+	// Проверяем, существует ли файл
+	if _, err := os.Stat(filePath); os.IsNotExist(err) {
+		// Файл не существует, создаем пустой файл
+		if err := fs.saveAdmins(); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	// Читаем файл
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return fmt.Errorf("failed to read admins file: %w", err)
+	}
+
+	// Если файл пустой, ничего не делаем
+	if len(data) == 0 {
+		return nil
+	}
+
+	// Десериализуем данные
+	var admins []*models.Admin
+	if err := json.Unmarshal(data, &admins); err != nil {
+		return fmt.Errorf("failed to unmarshal admins: %w", err)
+	}
+
+	// Сохраняем администраторов в память
+	for _, admin := range admins {
+		fs.admins.Store(admin.ID, admin)
+	}
+
+	return nil
+}
+
+// saveAdmins сохраняет администраторов в файл
+func (fs *Filestorage) saveAdmins() error {
+	filePath := filepath.Join(fs.dataDir, AdminsFileName)
+
+	// Собираем всех администраторов
+	var admins []*models.Admin
+	fs.admins.Range(func(key, value interface{}) bool {
+		admins = append(admins, value.(*models.Admin))
+		return true
+	})
+
+	// Сериализуем данные
+	data, err := json.MarshalIndent(admins, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal admins: %w", err)
+	}
+
+	// Записываем в файл
+	if err := os.WriteFile(filePath, data, 0644); err != nil {
+		return fmt.Errorf("failed to write admins file: %w", err)
 	}
 
 	return nil
@@ -716,6 +786,82 @@ func (fs *Filestorage) DeleteCode(code uuid.UUID) error {
 	// Сохраняем изменения в файл
 	if err := fs.saveCodes(); err != nil {
 		return fmt.Errorf("failed to save codes: %w", err)
+	}
+
+	return nil
+}
+
+// Методы для работы с администраторами
+
+func (fs *Filestorage) GetAdmin(adminId int64) (*models.Admin, error) {
+	adminVal, ok := fs.admins.Load(adminId)
+	if !ok {
+		return nil, errors.New("admin not found")
+	}
+	return adminVal.(*models.Admin), nil
+}
+
+func (fs *Filestorage) GetAllAdmins() ([]*models.Admin, error) {
+	var admins []*models.Admin
+
+	fs.admins.Range(func(key, value interface{}) bool {
+		admin := value.(*models.Admin)
+		if admin.IsActive {
+			admins = append(admins, admin)
+		}
+		return true
+	})
+
+	return admins, nil
+}
+
+func (fs *Filestorage) AddAdmin(admin *models.Admin) error {
+	// Проверяем, существует ли администратор с таким ID
+	_, ok := fs.admins.Load(admin.ID)
+	if ok {
+		return errors.New("admin with this ID already exists")
+	}
+
+	fs.admins.Store(admin.ID, admin)
+
+	// Сохраняем изменения в файл
+	if err := fs.saveAdmins(); err != nil {
+		return fmt.Errorf("failed to save admins: %w", err)
+	}
+
+	return nil
+}
+
+func (fs *Filestorage) UpdateAdmin(admin *models.Admin) error {
+	// Проверяем, существует ли администратор
+	_, ok := fs.admins.Load(admin.ID)
+	if !ok {
+		return errors.New("admin not found")
+	}
+
+	fs.admins.Store(admin.ID, admin)
+
+	// Сохраняем изменения в файл
+	if err := fs.saveAdmins(); err != nil {
+		return fmt.Errorf("failed to save admins: %w", err)
+	}
+
+	return nil
+}
+
+func (fs *Filestorage) DeleteAdmin(adminId int64) error {
+	// Проверяем, существует ли администратор
+	_, ok := fs.admins.Load(adminId)
+	if !ok {
+		return errors.New("admin not found")
+	}
+
+	// Удаляем администратора
+	fs.admins.Delete(adminId)
+
+	// Сохраняем изменения в файл
+	if err := fs.saveAdmins(); err != nil {
+		return fmt.Errorf("failed to save admins: %w", err)
 	}
 
 	return nil

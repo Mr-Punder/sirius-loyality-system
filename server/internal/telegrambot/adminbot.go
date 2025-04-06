@@ -1009,14 +1009,39 @@ func (ab *AdminBot) saveAdmins() error {
 
 // isAdmin проверяет, является ли пользователь администратором
 func (ab *AdminBot) isAdmin(userID int64) bool {
-	// Проверяем, есть ли пользователь в списке администраторов
-	for _, admin := range ab.admins.Admins {
-		if userID == admin.ID {
-			return true
+	// Проверяем через API, является ли пользователь администратором
+	data, err := ab.apiClient.Get(fmt.Sprintf("/admins/check/%d", userID), nil)
+	if err != nil {
+		ab.logger.Errorf("Ошибка проверки администратора через API: %v", err)
+
+		// Если API недоступен, используем локальный список администраторов
+		for _, admin := range ab.admins.Admins {
+			if userID == admin.ID {
+				return true
+			}
 		}
+
+		return false
 	}
 
-	return false
+	// Декодируем ответ
+	var response struct {
+		IsAdmin bool `json:"is_admin"`
+	}
+	if err := json.Unmarshal(data, &response); err != nil {
+		ab.logger.Errorf("Ошибка декодирования ответа API: %v", err)
+
+		// Если не удалось декодировать ответ, используем локальный список администраторов
+		for _, admin := range ab.admins.Admins {
+			if userID == admin.ID {
+				return true
+			}
+		}
+
+		return false
+	}
+
+	return response.IsAdmin
 }
 
 // createMainKeyboard создает основную клавиатуру с кнопками

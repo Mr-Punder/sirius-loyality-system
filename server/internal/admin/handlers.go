@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -16,15 +15,9 @@ import (
 	"github.com/google/uuid"
 )
 
-// AdminInfo представляет информацию об администраторе
-type AdminInfo struct {
-	ID   int64  `json:"id"`
-	Name string `json:"name,omitempty"`
-}
-
 // AdminsList представляет список администраторов
 type AdminsList struct {
-	Admins []AdminInfo `json:"admins"`
+	Admins []*models.Admin `json:"admins"`
 }
 
 // AdminHandler обрабатывает запросы к админке
@@ -612,113 +605,26 @@ func (ah *AdminHandler) handleGenerateCode(w http.ResponseWriter, r *http.Reques
 	json.NewEncoder(w).Encode(codeResp)
 }
 
-// loadAdmins загружает список администраторов из файла
-func (ah *AdminHandler) loadAdmins() (AdminsList, error) {
-	var admins AdminsList
-
-	// Проверяем, существует ли файл
-	if _, err := os.Stat(ah.adminsPath); os.IsNotExist(err) {
-		// Если файл не существует, возвращаем пустой список
-		return admins, nil
-	}
-
-	// Читаем файл
-	data, err := os.ReadFile(ah.adminsPath)
-	if err != nil {
-		return admins, err
-	}
-
-	// Декодируем JSON
-	var rawAdmins struct {
-		Admins []struct {
-			ID   int64  `json:"id"`
-			Name string `json:"name,omitempty"`
-		} `json:"admins"`
-	}
-	if err := json.Unmarshal(data, &rawAdmins); err != nil {
-		// Пробуем старый формат
-		var oldFormat struct {
-			Admins []int64 `json:"admins"`
-		}
-		if err := json.Unmarshal(data, &oldFormat); err != nil {
-			return admins, err
-		}
-
-		// Преобразуем из старого формата
-		for _, id := range oldFormat.Admins {
-			admins.Admins = append(admins.Admins, AdminInfo{
-				ID: id,
-			})
-		}
-		return admins, nil
-	}
-
-	// Преобразуем в AdminsList
-	for _, admin := range rawAdmins.Admins {
-		admins.Admins = append(admins.Admins, AdminInfo{
-			ID:   admin.ID,
-			Name: admin.Name,
-		})
-	}
-
-	return admins, nil
-}
-
-// saveAdmins сохраняет список администраторов в файл
-func (ah *AdminHandler) saveAdmins(admins []AdminInfo) error {
-	// Преобразуем в формат для сохранения
-	var rawAdmins struct {
-		Admins []struct {
-			ID   int64  `json:"id"`
-			Name string `json:"name,omitempty"`
-		} `json:"admins"`
-	}
-
-	rawAdmins.Admins = make([]struct {
-		ID   int64  `json:"id"`
-		Name string `json:"name,omitempty"`
-	}, len(admins))
-
-	for i, admin := range admins {
-		rawAdmins.Admins[i].ID = admin.ID
-		rawAdmins.Admins[i].Name = admin.Name
-	}
-
-	// Кодируем JSON
-	data, err := json.MarshalIndent(rawAdmins, "", "    ")
-	if err != nil {
-		return err
-	}
-
-	// Создаем директорию, если она не существует
-	dir := filepath.Dir(ah.adminsPath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return err
-	}
-
-	// Записываем файл
-	if err := os.WriteFile(ah.adminsPath, data, 0644); err != nil {
-		return err
-	}
-
-	return nil
-}
-
 // handleGetAdmins обрабатывает запрос на получение списка администраторов
 func (ah *AdminHandler) handleGetAdmins(w http.ResponseWriter, r *http.Request) {
 	ah.logger.Info("Запрос на получение списка администраторов")
 
-	// Загружаем список администраторов
-	admins, err := ah.loadAdmins()
+	// Получаем список администраторов из базы данных
+	admins, err := ah.store.GetAllAdmins()
 	if err != nil {
-		ah.logger.Errorf("Ошибка загрузки списка администраторов: %v", err)
+		ah.logger.Errorf("Ошибка получения списка администраторов: %v", err)
 		http.Error(w, "Внутренняя ошибка сервера", http.StatusInternalServerError)
 		return
 	}
 
+	// Формируем ответ
+	response := AdminsList{
+		Admins: admins,
+	}
+
 	// Отправляем ответ
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(admins)
+	json.NewEncoder(w).Encode(response)
 }
 
 // handleAddAdmin обрабатывает запрос на добавление администратора
@@ -727,8 +633,9 @@ func (ah *AdminHandler) handleAddAdmin(w http.ResponseWriter, r *http.Request) {
 
 	// Декодируем запрос
 	var request struct {
-		ID   int64  `json:"id"`
-		Name string `json:"name"`
+		ID       int64  `json:"id"`
+		Name     string `json:"name"`
+		Username string `json:"username,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 		ah.logger.Errorf("Ошибка декодирования запроса: %v", err)
@@ -736,32 +643,18 @@ func (ah *AdminHandler) handleAddAdmin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Загружаем список администраторов
-	admins, err := ah.loadAdmins()
-	if err != nil {
-		ah.logger.Errorf("Ошибка загрузки списка администраторов: %v", err)
-		http.Error(w, "Внутренняя ошибка сервера", http.StatusInternalServerError)
-		return
+	// Создаем нового администратора
+	admin := &models.Admin{
+		ID:       request.ID,
+		Name:     request.Name,
+		Username: request.Username,
+		IsActive: true,
 	}
 
-	// Проверяем, есть ли уже такой администратор
-	for _, admin := range admins.Admins {
-		if admin.ID == request.ID {
-			http.Error(w, "Администратор с таким ID уже существует", http.StatusBadRequest)
-			return
-		}
-	}
-
-	// Добавляем нового администратора
-	admins.Admins = append(admins.Admins, AdminInfo{
-		ID:   request.ID,
-		Name: request.Name,
-	})
-
-	// Сохраняем список администраторов
-	if err := ah.saveAdmins(admins.Admins); err != nil {
-		ah.logger.Errorf("Ошибка сохранения списка администраторов: %v", err)
-		http.Error(w, "Внутренняя ошибка сервера", http.StatusInternalServerError)
+	// Добавляем администратора в базу данных
+	if err := ah.store.AddAdmin(admin); err != nil {
+		ah.logger.Errorf("Ошибка добавления администратора: %v", err)
+		http.Error(w, "Ошибка добавления администратора", http.StatusInternalServerError)
 		return
 	}
 
@@ -784,34 +677,10 @@ func (ah *AdminHandler) handleRemoveAdmin(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Загружаем список администраторов
-	admins, err := ah.loadAdmins()
-	if err != nil {
-		ah.logger.Errorf("Ошибка загрузки списка администраторов: %v", err)
-		http.Error(w, "Внутренняя ошибка сервера", http.StatusInternalServerError)
-		return
-	}
-
-	// Удаляем администратора
-	var newAdmins []AdminInfo
-	found := false
-	for _, admin := range admins.Admins {
-		if admin.ID != request.ID {
-			newAdmins = append(newAdmins, admin)
-		} else {
-			found = true
-		}
-	}
-
-	if !found {
-		http.Error(w, "Администратор с таким ID не найден", http.StatusNotFound)
-		return
-	}
-
-	// Сохраняем список администраторов
-	if err := ah.saveAdmins(newAdmins); err != nil {
-		ah.logger.Errorf("Ошибка сохранения списка администраторов: %v", err)
-		http.Error(w, "Внутренняя ошибка сервера", http.StatusInternalServerError)
+	// Удаляем администратора из базы данных
+	if err := ah.store.DeleteAdmin(request.ID); err != nil {
+		ah.logger.Errorf("Ошибка удаления администратора: %v", err)
+		http.Error(w, "Ошибка удаления администратора", http.StatusInternalServerError)
 		return
 	}
 

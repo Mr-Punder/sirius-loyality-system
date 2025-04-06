@@ -13,6 +13,7 @@ type Memstorage struct {
 	transactions sync.Map // uuid.UUID -> *models.Transaction
 	codes        sync.Map // uuid.UUID -> *models.Code
 	codeUsages   sync.Map // uuid.UUID -> *models.CodeUsage
+	admins       sync.Map // int64 -> *models.Admin
 }
 
 func NewMemstorage() *Memstorage {
@@ -348,5 +349,62 @@ func (m *Memstorage) DeleteCode(code uuid.UUID) error {
 	codeInfo.IsActive = false
 	m.codes.Store(code, codeInfo)
 
+	return nil
+}
+
+// Методы для работы с администраторами
+func (m *Memstorage) GetAdmin(adminId int64) (*models.Admin, error) {
+	adminVal, ok := m.admins.Load(adminId)
+	if !ok {
+		return nil, errors.New("admin not found")
+	}
+	return adminVal.(*models.Admin), nil
+}
+
+func (m *Memstorage) GetAllAdmins() ([]*models.Admin, error) {
+	var admins []*models.Admin
+
+	m.admins.Range(func(key, value interface{}) bool {
+		admin := value.(*models.Admin)
+		if admin.IsActive {
+			admins = append(admins, admin)
+		}
+		return true
+	})
+
+	return admins, nil
+}
+
+func (m *Memstorage) AddAdmin(admin *models.Admin) error {
+	// Проверяем, существует ли администратор с таким ID
+	_, ok := m.admins.Load(admin.ID)
+	if ok {
+		return errors.New("admin with this ID already exists")
+	}
+
+	m.admins.Store(admin.ID, admin)
+	return nil
+}
+
+func (m *Memstorage) UpdateAdmin(admin *models.Admin) error {
+	// Проверяем, существует ли администратор
+	_, ok := m.admins.Load(admin.ID)
+	if !ok {
+		return errors.New("admin not found")
+	}
+
+	m.admins.Store(admin.ID, admin)
+	return nil
+}
+
+func (m *Memstorage) DeleteAdmin(adminId int64) error {
+	// Проверяем, существует ли администратор
+	_, ok := m.admins.Load(adminId)
+	if !ok {
+		return errors.New("admin not found")
+	}
+
+	// Удаляем администратора
+	m.admins.Delete(adminId)
 	return nil
 }
