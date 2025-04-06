@@ -1,6 +1,6 @@
 module github.com/MrPunder/sirius-loyality-system
 
-go 1.22.0
+go 1.22
 
 require (
 	github.com/boombuler/barcode v1.0.2
