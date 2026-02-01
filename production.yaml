@@ -1,0 +1,24 @@
+server:
+  runaddress: "0.0.0.0:8080"
+
+logger:
+  level: "info"
+  path: "/opt/sirius/logs/server.log"
+  errorpath: "/opt/sirius/logs/server_error.log"
+  maxsize: 10
+  maxbackups: 5
+  maxage: 30
+  compress: true
+
+storage:
+  type: "postgres"
+  connection_string: "postgres://USER:PASSWORD@HOST:6432/DATABASE?sslmode=require"
+  migrations_path: "/opt/sirius/migrations/postgres"
+
+admin:
+  jwt_secret: "sirius-rating-system-secret-key-2025"
+  static_dir: "/opt/sirius/static/admin"
+  admins_path: "/opt/sirius/config/admins.json"
+
+api:
+  token: "sirius-rating-system-api-token-2025"

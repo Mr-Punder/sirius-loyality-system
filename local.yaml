@@ -1,0 +1,24 @@
+server:
+  runaddress: "0.0.0.0:8080"
+
+logger:
+  level: "debug"
+  path: "./logs/server.log"
+  errorpath: "./logs/server_error.log"
+  maxsize: 10
+  maxbackups: 5
+  maxage: 30
+  compress: true
+
+storage:
+  type: "postgres"
+  connection_string: "postgres://USER:PASSWORD@HOST:6432/DATABASE?sslmode=require"
+  migrations_path: "./server/migrations/postgres"
+
+admin:
+  jwt_secret: "local-dev-secret-change-in-production"
+  static_dir: "./server/static/admin"
+  admins_path: "./local-config/admins.json"
+
+api:
+  token: "local-dev-api-token"

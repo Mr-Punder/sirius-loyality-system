@@ -1,0 +1,21 @@
+[Unit]
+Description=Sirius Loyalty System User Bot
+After=network.target sirius-server.service
+
+[Service]
+Type=simple
+User=goomer125
+WorkingDirectory=/opt/sirius
+Environment="CONFIG_PATH=/opt/sirius/production.yaml"
+Environment="TOKEN_PATH=/opt/sirius/config/token.txt"
+Environment="SERVER_URL=http://localhost:8080"
+Environment="API_TOKEN_PATH=/opt/sirius/config/api_token.txt"
+ExecStart=/opt/sirius/bin/userbot --config /opt/sirius/production.yaml
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=sirius-userbot
+
+[Install]
+WantedBy=multi-user.target

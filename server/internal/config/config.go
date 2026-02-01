@@ -123,6 +123,10 @@ func LoadConfig(config_path string) (*Config, error) {
 		config.Admin.AdminsPath = envAdminsPath
 	}
 
+	if envConnStr := os.Getenv("POSTGRES_CONNECTION_STRING"); envConnStr != "" {
+		config.Storage.ConnectionString = envConnStr
+	}
+
 	// Установка значений по умолчанию, если они не заданы
 	if config.Storage.Type == "" {
 		config.Storage.Type = "file"

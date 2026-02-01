@@ -1,0 +1,18 @@
+[Unit]
+Description=Sirius Loyalty System Server
+After=network.target
+
+[Service]
+Type=simple
+User=goomer125
+WorkingDirectory=/opt/sirius
+Environment="CONFIG_PATH=/opt/sirius/production.yaml"
+ExecStart=/opt/sirius/bin/loyalityserver
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=sirius-server
+
+[Install]
+WantedBy=multi-user.target
