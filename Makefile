@@ -45,7 +45,7 @@ run-adminbot:
 
 build-linux:
 	@cd server && go mod download
-	@cd server && GOOS=linux GOARCH=amd64 CGO_ENABLED=1 go build -o loyalityserver ./cmd/loyalityserver
+	@cd server && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o loyalityserver ./cmd/loyalityserver
 	@cd server && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o userbot ./cmd/telegrambot/user
 	@cd server && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o adminbot ./cmd/telegrambot/admin
 

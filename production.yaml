@@ -14,6 +14,8 @@ storage:
   type: "postgres"
   connection_string: "postgres://USER:PASSWORD@HOST:6432/DATABASE?sslmode=require"
   migrations_path: "/opt/sirius/migrations/postgres"
+  datapath: "/opt/sirius/data"
+  
 
 admin:
   jwt_secret: "sirius-rating-system-secret-key-2025"

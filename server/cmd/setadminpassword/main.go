@@ -20,8 +20,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Загружаем конфигурацию
-	conf, err := config.LoadConfig()
+	conf, err := config.LoadConfig("")
 	if err != nil {
 		fmt.Printf("Ошибка загрузки конфигурации: %v\n", err)
 		os.Exit(1)
