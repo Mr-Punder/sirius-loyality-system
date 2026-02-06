@@ -80,6 +80,7 @@ type PiecesResponse struct {
 // PuzzleResponse представляет ответ с информацией о пазле
 type PuzzleResponse struct {
 	Id          int        `json:"id"`
+	Name        string     `json:"name"`
 	IsCompleted bool       `json:"is_completed"`
 	CompletedAt *time.Time `json:"completed_at,omitempty"`
 	TotalPieces int        `json:"total_pieces"`
@@ -177,6 +178,7 @@ func (ah *AdminHandler) RegisterRoutes(r chi.Router) {
 
 			// Пазлы
 			r.Get("/puzzles", ah.handlePuzzles)
+			r.Patch("/puzzles/{id}", ah.handleUpdatePuzzle)
 
 			// Детали пазлов
 			r.Get("/pieces", ah.handlePieces)
@@ -545,6 +547,7 @@ func (ah *AdminHandler) handlePuzzles(w http.ResponseWriter, r *http.Request) {
 
 		puzzleResponses = append(puzzleResponses, PuzzleResponse{
 			Id:          puzzle.Id,
+			Name:        puzzle.Name,
 			IsCompleted: puzzle.IsCompleted,
 			CompletedAt: puzzle.CompletedAt,
 			TotalPieces: len(pieces),
@@ -560,6 +563,52 @@ func (ah *AdminHandler) handlePuzzles(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
+}
+
+// handleUpdatePuzzle обрабатывает запрос на обновление пазла
+func (ah *AdminHandler) handleUpdatePuzzle(w http.ResponseWriter, r *http.Request) {
+	puzzleIdStr := chi.URLParam(r, "id")
+	puzzleId, err := strconv.Atoi(puzzleIdStr)
+	if err != nil {
+		http.Error(w, "Неверный ID пазла", http.StatusBadRequest)
+		return
+	}
+
+	// Получаем пазл
+	puzzle, err := ah.store.GetPuzzle(puzzleId)
+	if err != nil {
+		ah.logger.Errorf("Пазл не найден: %v", err)
+		http.Error(w, "Пазл не найден", http.StatusNotFound)
+		return
+	}
+
+	// Декодируем запрос
+	var request struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		http.Error(w, "Неверный формат запроса", http.StatusBadRequest)
+		return
+	}
+
+	// Обновляем имя
+	puzzle.Name = request.Name
+	if err := ah.store.UpdatePuzzle(puzzle); err != nil {
+		ah.logger.Errorf("Ошибка обновления пазла: %v", err)
+		http.Error(w, "Ошибка обновления пазла", http.StatusInternalServerError)
+		return
+	}
+
+	ah.logger.Infof("Пазл #%d переименован в '%s'", puzzleId, request.Name)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"puzzle": map[string]interface{}{
+			"id":   puzzle.Id,
+			"name": puzzle.Name,
+		},
+	})
 }
 
 // handlePieces обрабатывает запрос на получение списка деталей пазлов

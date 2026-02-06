@@ -11,6 +11,21 @@
 
 <body>
     <div class="container" x-data="puzzlesApp()" x-init="init">
+        <!-- Модальное окно редактирования -->
+        <div class="modal" x-show="editModal.show" x-cloak @click.self="editModal.show = false">
+            <div class="modal-content">
+                <h4>Редактировать пазл #<span x-text="editModal.id"></span></h4>
+                <div class="form-group">
+                    <label>Название пазла</label>
+                    <input type="text" x-model="editModal.name" placeholder="Введите название...">
+                </div>
+                <div class="modal-actions">
+                    <button class="btn-secondary" @click="editModal.show = false">Отмена</button>
+                    <button class="btn-primary" @click="savePuzzleName()">Сохранить</button>
+                </div>
+            </div>
+        </div>
+
         <!-- Навигация -->
         <div class="nav">
             <a href="users.html" class="nav-item">Пользователи</a>
@@ -68,6 +83,7 @@
                 <thead>
                     <tr>
                         <th class="sortable" :class="getSortClass('id')" @click="sortBy('id')">№ Пазла</th>
+                        <th class="sortable" :class="getSortClass('name')" @click="sortBy('name')">Название</th>
                         <th class="sortable" :class="getSortClass('owned_pieces')" @click="sortBy('owned_pieces')">Прогресс</th>
                         <th class="sortable" :class="getSortClass('is_completed')" @click="sortBy('is_completed')">Статус</th>
                         <th class="sortable" :class="getSortClass('completed_at')" @click="sortBy('completed_at')">Дата сборки</th>
@@ -77,17 +93,20 @@
                 <tbody>
                     <template x-if="loading">
                         <tr>
-                            <td colspan="5" style="text-align: center;">Загрузка...</td>
+                            <td colspan="6" style="text-align: center;">Загрузка...</td>
                         </tr>
                     </template>
                     <template x-if="!loading && filteredPuzzles.length === 0">
                         <tr>
-                            <td colspan="5" style="text-align: center;">Нет пазлов</td>
+                            <td colspan="6" style="text-align: center;">Нет пазлов</td>
                         </tr>
                     </template>
                     <template x-for="puzzle in filteredPuzzles" :key="puzzle.id">
                         <tr :class="{ 'completed': puzzle.is_completed }">
                             <td x-text="puzzle.id"></td>
+                            <td>
+                                <span x-text="puzzle.name || '-'" class="puzzle-name"></span>
+                            </td>
                             <td>
                                 <div class="progress-bar">
                                     <div class="progress-fill" :style="'width: ' + (puzzle.owned_pieces / 6 * 100) + '%'"></div>
@@ -99,6 +118,7 @@
                             </td>
                             <td x-text="puzzle.completed_at ? formatDate(puzzle.completed_at) : '-'"></td>
                             <td>
+                                <button @click="openEditModal(puzzle)" class="btn-small btn-edit">Изменить</button>
                                 <button @click="viewPieces(puzzle.id)" class="btn-small">Детали</button>
                             </td>
                         </tr>
@@ -120,6 +140,11 @@
                 sort: {
                     field: 'id',
                     direction: 'asc'
+                },
+                editModal: {
+                    show: false,
+                    id: null,
+                    name: ''
                 },
 
                 init() {
@@ -237,6 +262,9 @@
                         if (field === 'completed_at') {
                             valueA = valueA ? new Date(valueA) : new Date(0);
                             valueB = valueB ? new Date(valueB) : new Date(0);
+                        } else if (field === 'name') {
+                            valueA = (valueA || '').toLowerCase();
+                            valueB = (valueB || '').toLowerCase();
                         } else if (typeof valueA === 'boolean') {
                             valueA = valueA ? 1 : 0;
                             valueB = valueB ? 1 : 0;
@@ -291,6 +319,42 @@
 
                 viewPieces(puzzleId) {
                     window.location.href = `pieces.html?puzzle_id=${puzzleId}`;
+                },
+
+                openEditModal(puzzle) {
+                    this.editModal.id = puzzle.id;
+                    this.editModal.name = puzzle.name || '';
+                    this.editModal.show = true;
+                },
+
+                savePuzzleName() {
+                    const token = localStorage.getItem('admin_token');
+
+                    fetch(`/api/admin/puzzles/${this.editModal.id}`, {
+                        method: 'PATCH',
+                        headers: {
+                            'Authorization': `Bearer ${token}`,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({ name: this.editModal.name })
+                    })
+                    .then(response => {
+                        if (!response.ok) {
+                            throw new Error('Ошибка сохранения');
+                        }
+                        return response.json();
+                    })
+                    .then(data => {
+                        // Обновляем пазл в списке
+                        const puzzle = this.puzzles.find(p => p.id === this.editModal.id);
+                        if (puzzle) {
+                            puzzle.name = this.editModal.name;
+                        }
+                        this.editModal.show = false;
+                    })
+                    .catch(error => {
+                        alert('Ошибка: ' + error.message);
+                    });
                 }
             };
         }
@@ -378,6 +442,114 @@
         .btn-small {
             padding: 4px 8px;
             font-size: 0.85rem;
+        }
+
+        .btn-edit {
+            background: #6c757d;
+            color: white;
+            border: none;
+            cursor: pointer;
+            border-radius: 4px;
+            margin-right: 4px;
+        }
+
+        .btn-edit:hover {
+            background: #5a6268;
+        }
+
+        .puzzle-name {
+            color: #495057;
+        }
+
+        /* Модальное окно */
+        .modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+
+        .modal-content {
+            background: white;
+            border-radius: 8px;
+            padding: 1.5rem;
+            width: 100%;
+            max-width: 400px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+        }
+
+        .modal-content h4 {
+            margin: 0 0 1rem 0;
+            color: #333;
+        }
+
+        .modal-content .form-group {
+            margin-bottom: 1rem;
+        }
+
+        .modal-content .form-group label {
+            display: block;
+            margin-bottom: 0.5rem;
+            color: #555;
+            font-weight: 500;
+        }
+
+        .modal-content .form-group input {
+            width: 100%;
+            padding: 0.5rem;
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+            font-size: 1rem;
+            box-sizing: border-box;
+        }
+
+        .modal-content .form-group input:focus {
+            outline: none;
+            border-color: #007bff;
+            box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.25);
+        }
+
+        .modal-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 0.5rem;
+            margin-top: 1rem;
+        }
+
+        .btn-secondary {
+            background: #6c757d;
+            color: white;
+            border: none;
+            padding: 0.5rem 1rem;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        .btn-secondary:hover {
+            background: #5a6268;
+        }
+
+        .btn-primary {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 0.5rem 1rem;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        .btn-primary:hover {
+            background: #0069d9;
+        }
+
+        [x-cloak] {
+            display: none !important;
         }
     </style>
 </body>
