@@ -772,3 +772,105 @@ func (p *PgStorage) scanNotifications(rows pgx.Rows) ([]*models.Notification, er
 	}
 	return notifications, nil
 }
+
+// ==================== МЕТОДЫ ДЛЯ БИБЛИОТЕКИ ВЛОЖЕНИЙ ====================
+
+func (p *PgStorage) AddAttachment(attachment *models.Attachment) error {
+	ctx := context.Background()
+	query := `INSERT INTO attachments (id, filename, store_path, mime_type, size, created_at)
+	          VALUES ($1, $2, $3, $4, $5, $6)`
+
+	_, err := p.pool.Exec(ctx, query,
+		attachment.Id,
+		attachment.Filename,
+		attachment.StorePath,
+		attachment.MimeType,
+		attachment.Size,
+		attachment.CreatedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to add attachment: %w", err)
+	}
+	return nil
+}
+
+func (p *PgStorage) GetAttachment(id uuid.UUID) (*models.Attachment, error) {
+	ctx := context.Background()
+	query := `SELECT id, filename, store_path, mime_type, size, created_at
+	          FROM attachments WHERE id = $1`
+
+	var attachment models.Attachment
+	err := p.pool.QueryRow(ctx, query, id).Scan(
+		&attachment.Id,
+		&attachment.Filename,
+		&attachment.StorePath,
+		&attachment.MimeType,
+		&attachment.Size,
+		&attachment.CreatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, errors.New("attachment not found")
+		}
+		return nil, fmt.Errorf("failed to get attachment: %w", err)
+	}
+	return &attachment, nil
+}
+
+func (p *PgStorage) GetAllAttachments() ([]*models.Attachment, error) {
+	ctx := context.Background()
+	query := `SELECT id, filename, store_path, mime_type, size, created_at
+	          FROM attachments ORDER BY created_at DESC`
+
+	rows, err := p.pool.Query(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query attachments: %w", err)
+	}
+	defer rows.Close()
+
+	var attachments []*models.Attachment
+	for rows.Next() {
+		var attachment models.Attachment
+		err := rows.Scan(
+			&attachment.Id,
+			&attachment.Filename,
+			&attachment.StorePath,
+			&attachment.MimeType,
+			&attachment.Size,
+			&attachment.CreatedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan attachment: %w", err)
+		}
+		attachments = append(attachments, &attachment)
+	}
+	return attachments, nil
+}
+
+func (p *PgStorage) UpdateAttachment(attachment *models.Attachment) error {
+	ctx := context.Background()
+	query := `UPDATE attachments SET filename = $2 WHERE id = $1`
+
+	result, err := p.pool.Exec(ctx, query, attachment.Id, attachment.Filename)
+	if err != nil {
+		return fmt.Errorf("failed to update attachment: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return errors.New("attachment not found")
+	}
+	return nil
+}
+
+func (p *PgStorage) DeleteAttachment(id uuid.UUID) error {
+	ctx := context.Background()
+	query := `DELETE FROM attachments WHERE id = $1`
+
+	result, err := p.pool.Exec(ctx, query, id)
+	if err != nil {
+		return fmt.Errorf("failed to delete attachment: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return errors.New("attachment not found")
+	}
+	return nil
+}

@@ -72,6 +72,16 @@ type Notification struct {
 	ErrorCount  int                `json:"error_count"` // Сколько ошибок
 }
 
+// Attachment представляет файл в библиотеке вложений
+type Attachment struct {
+	Id        uuid.UUID `json:"id"`
+	Filename  string    `json:"filename"`   // Отображаемое имя файла
+	StorePath string    `json:"store_path"` // Путь к файлу на диске (data/library/uuid.ext)
+	MimeType  string    `json:"mime_type"`  // MIME-тип (image/jpeg, application/pdf, etc.)
+	Size      int64     `json:"size"`       // Размер в байтах
+	CreatedAt time.Time `json:"created_at"`
+}
+
 // GetCurrentTime возвращает текущее время
 func GetCurrentTime() time.Time {
 	return time.Now()

@@ -1009,3 +1009,110 @@ func boolToInt(b bool) int {
 	}
 	return 0
 }
+
+// ==================== МЕТОДЫ ДЛЯ БИБЛИОТЕКИ ВЛОЖЕНИЙ ====================
+
+func (s *SQLiteStorage) AddAttachment(attachment *models.Attachment) error {
+	query := `INSERT INTO attachments (id, filename, store_path, mime_type, size, created_at)
+	          VALUES (?, ?, ?, ?, ?, ?)`
+
+	_, err := s.db.Exec(query,
+		attachment.Id.String(),
+		attachment.Filename,
+		attachment.StorePath,
+		attachment.MimeType,
+		attachment.Size,
+		attachment.CreatedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to add attachment: %w", err)
+	}
+	return nil
+}
+
+func (s *SQLiteStorage) GetAttachment(id uuid.UUID) (*models.Attachment, error) {
+	query := `SELECT id, filename, store_path, mime_type, size, created_at
+	          FROM attachments WHERE id = ?`
+
+	var attachment models.Attachment
+	var idStr string
+	var createdAtStr string
+	err := s.db.QueryRow(query, id.String()).Scan(
+		&idStr,
+		&attachment.Filename,
+		&attachment.StorePath,
+		&attachment.MimeType,
+		&attachment.Size,
+		&createdAtStr,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, errors.New("attachment not found")
+		}
+		return nil, fmt.Errorf("failed to get attachment: %w", err)
+	}
+	attachment.Id, _ = uuid.Parse(idStr)
+	attachment.CreatedAt, _ = time.Parse("2006-01-02 15:04:05", createdAtStr)
+	return &attachment, nil
+}
+
+func (s *SQLiteStorage) GetAllAttachments() ([]*models.Attachment, error) {
+	query := `SELECT id, filename, store_path, mime_type, size, created_at
+	          FROM attachments ORDER BY created_at DESC`
+
+	rows, err := s.db.Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query attachments: %w", err)
+	}
+	defer rows.Close()
+
+	var attachments []*models.Attachment
+	for rows.Next() {
+		var attachment models.Attachment
+		var idStr string
+		var createdAtStr string
+		err := rows.Scan(
+			&idStr,
+			&attachment.Filename,
+			&attachment.StorePath,
+			&attachment.MimeType,
+			&attachment.Size,
+			&createdAtStr,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan attachment: %w", err)
+		}
+		attachment.Id, _ = uuid.Parse(idStr)
+		attachment.CreatedAt, _ = time.Parse("2006-01-02 15:04:05", createdAtStr)
+		attachments = append(attachments, &attachment)
+	}
+	return attachments, nil
+}
+
+func (s *SQLiteStorage) UpdateAttachment(attachment *models.Attachment) error {
+	query := `UPDATE attachments SET filename = ? WHERE id = ?`
+
+	result, err := s.db.Exec(query, attachment.Filename, attachment.Id.String())
+	if err != nil {
+		return fmt.Errorf("failed to update attachment: %w", err)
+	}
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		return errors.New("attachment not found")
+	}
+	return nil
+}
+
+func (s *SQLiteStorage) DeleteAttachment(id uuid.UUID) error {
+	query := `DELETE FROM attachments WHERE id = ?`
+
+	result, err := s.db.Exec(query, id.String())
+	if err != nil {
+		return fmt.Errorf("failed to delete attachment: %w", err)
+	}
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		return errors.New("attachment not found")
+	}
+	return nil
+}

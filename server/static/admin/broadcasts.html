@@ -101,6 +101,20 @@
             cursor: not-allowed;
         }
 
+        .btn-secondary {
+            background: #95a5a6;
+            color: white;
+            border: none;
+            padding: 0.5rem 1rem;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+        }
+
+        .btn-secondary:hover {
+            background: #7f8c8d;
+        }
+
         .stat-cards {
             display: flex;
             gap: 1rem;
@@ -186,6 +200,183 @@
             font-size: 1.5rem;
             color: #3498db;
         }
+
+        /* Библиотека файлов */
+        .library-section {
+            background: white;
+            padding: 1.5rem;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            margin-bottom: 1.5rem;
+        }
+
+        .library-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+        }
+
+        .library-header h3 {
+            margin: 0;
+            color: #333;
+        }
+
+        .library-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+            gap: 1rem;
+        }
+
+        .library-item {
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            padding: 0.5rem;
+            text-align: center;
+            cursor: pointer;
+            transition: border-color 0.2s, background 0.2s;
+            position: relative;
+        }
+
+        .library-item:hover {
+            border-color: #3498db;
+            background: #f8f9fa;
+        }
+
+        .library-item.selected {
+            border-color: #27ae60;
+            background: #e8f5e9;
+        }
+
+        .library-item .preview {
+            width: 100%;
+            height: 100px;
+            object-fit: cover;
+            border-radius: 4px;
+            background: #f0f0f0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .library-item .preview img {
+            max-width: 100%;
+            max-height: 100%;
+            border-radius: 4px;
+        }
+
+        .library-item .preview .icon {
+            font-size: 3rem;
+            color: #95a5a6;
+        }
+
+        .library-item .filename {
+            font-size: 12px;
+            margin-top: 0.5rem;
+            word-break: break-word;
+            color: #333;
+        }
+
+        .library-item .size {
+            font-size: 11px;
+            color: #999;
+        }
+
+        .library-item .actions {
+            position: absolute;
+            top: 4px;
+            right: 4px;
+            display: none;
+            gap: 4px;
+        }
+
+        .library-item:hover .actions {
+            display: flex;
+        }
+
+        .library-item .actions button {
+            width: 24px;
+            height: 24px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .library-item .actions .edit-btn {
+            background: #3498db;
+            color: white;
+        }
+
+        .library-item .actions .delete-btn {
+            background: #e74c3c;
+            color: white;
+        }
+
+        .library-item .checkbox {
+            position: absolute;
+            top: 8px;
+            left: 8px;
+            width: 20px;
+            height: 20px;
+        }
+
+        /* Модальное окно */
+        .modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.5);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+
+        .modal-content {
+            background: white;
+            padding: 1.5rem;
+            border-radius: 8px;
+            width: 90%;
+            max-width: 400px;
+        }
+
+        .modal-content h4 {
+            margin-top: 0;
+        }
+
+        .modal-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 0.5rem;
+            margin-top: 1rem;
+        }
+
+        .tabs {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 1rem;
+            border-bottom: 2px solid #e0e0e0;
+        }
+
+        .tab {
+            padding: 0.5rem 1rem;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            margin-bottom: -2px;
+            color: #666;
+        }
+
+        .tab.active {
+            border-bottom-color: #3498db;
+            color: #3498db;
+            font-weight: 500;
+        }
     </style>
 </head>
 
@@ -194,6 +385,21 @@
         <!-- Оверлей загрузки -->
         <div class="loading-overlay" x-show="sending" x-cloak>
             <div class="loading-spinner">Отправка...</div>
+        </div>
+
+        <!-- Модальное окно переименования -->
+        <div class="modal" x-show="editModal.show" x-cloak @click.self="editModal.show = false">
+            <div class="modal-content">
+                <h4>Переименовать файл</h4>
+                <div class="form-group">
+                    <label>Новое имя файла</label>
+                    <input type="text" x-model="editModal.filename">
+                </div>
+                <div class="modal-actions">
+                    <button class="btn-secondary" @click="editModal.show = false">Отмена</button>
+                    <button class="btn-primary" @click="renameAttachment()">Сохранить</button>
+                </div>
+            </div>
         </div>
 
         <!-- Навигация -->
@@ -210,7 +416,7 @@
         <div class="header">
             <h1>Рассылки</h1>
             <div class="actions">
-                <button @click="loadNotifications()">Обновить</button>
+                <button @click="loadNotifications(); loadLibrary()">Обновить</button>
             </div>
         </div>
 
@@ -227,6 +433,52 @@
             <div class="stat-card">
                 <div class="stat-value failed" x-text="stats.failed"></div>
                 <div class="stat-label">Ошибки</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" x-text="library.length"></div>
+                <div class="stat-label">Файлов</div>
+            </div>
+        </div>
+
+        <!-- Библиотека файлов -->
+        <div class="library-section">
+            <div class="library-header">
+                <h3>📁 Библиотека файлов</h3>
+                <div>
+                    <input type="file" id="libraryUpload" multiple @change="uploadToLibrary($event)" style="display:none">
+                    <button class="btn-primary" @click="document.getElementById('libraryUpload').click()">
+                        + Загрузить файл
+                    </button>
+                </div>
+            </div>
+
+            <div x-show="library.length === 0" style="text-align: center; padding: 2rem; color: #999;">
+                Библиотека пуста. Загрузите файлы для использования в рассылках.
+            </div>
+
+            <div class="library-grid" x-show="library.length > 0">
+                <template x-for="file in library" :key="file.id">
+                    <div class="library-item" :class="{ 'selected': selectedLibraryFiles.includes(file.id) }"
+                         @click="toggleLibraryFile(file.id)">
+                        <input type="checkbox" class="checkbox"
+                               :checked="selectedLibraryFiles.includes(file.id)"
+                               @click.stop="toggleLibraryFile(file.id)">
+                        <div class="actions" @click.stop>
+                            <button class="edit-btn" @click="openEditModal(file)" title="Переименовать">✎</button>
+                            <button class="delete-btn" @click="deleteFromLibrary(file.id)" title="Удалить">×</button>
+                        </div>
+                        <div class="preview">
+                            <template x-if="isImage(file.mime_type)">
+                                <img :src="'/api/admin/attachments/' + file.id + '/file'" :alt="file.filename">
+                            </template>
+                            <template x-if="!isImage(file.mime_type)">
+                                <span class="icon">📄</span>
+                            </template>
+                        </div>
+                        <div class="filename" x-text="file.filename" :title="file.filename"></div>
+                        <div class="size" x-text="formatSize(file.size)"></div>
+                    </div>
+                </template>
             </div>
         </div>
 
@@ -250,15 +502,44 @@
                 </select>
             </div>
             <div class="form-group">
-                <label>Файлы (фото, документы)</label>
-                <input type="file" multiple @change="handleFiles($event)" accept="image/*,.pdf,.doc,.docx">
-                <div class="file-list" x-show="newBroadcast.files.length > 0">
-                    <template x-for="(file, index) in newBroadcast.files" :key="index">
-                        <span class="file-tag">
-                            <span x-text="file.name"></span>
-                            <span class="remove" @click="removeFile(index)">&times;</span>
-                        </span>
+                <label>Вложения</label>
+
+                <!-- Табы -->
+                <div class="tabs">
+                    <div class="tab" :class="{ 'active': attachTab === 'library' }" @click="attachTab = 'library'">
+                        Из библиотеки (<span x-text="selectedLibraryFiles.length"></span>)
+                    </div>
+                    <div class="tab" :class="{ 'active': attachTab === 'upload' }" @click="attachTab = 'upload'">
+                        Загрузить новые (<span x-text="newBroadcast.files.length"></span>)
+                    </div>
+                </div>
+
+                <!-- Из библиотеки -->
+                <div x-show="attachTab === 'library'" style="padding: 0.5rem 0;">
+                    <template x-if="selectedLibraryFiles.length === 0">
+                        <span style="color: #999;">Выберите файлы из библиотеки выше (кликните на карточку)</span>
                     </template>
+                    <div class="file-list" x-show="selectedLibraryFiles.length > 0">
+                        <template x-for="fileId in selectedLibraryFiles" :key="fileId">
+                            <span class="file-tag">
+                                <span x-text="getLibraryFilename(fileId)"></span>
+                                <span class="remove" @click="toggleLibraryFile(fileId)">&times;</span>
+                            </span>
+                        </template>
+                    </div>
+                </div>
+
+                <!-- Загрузить новые -->
+                <div x-show="attachTab === 'upload'">
+                    <input type="file" multiple @change="handleFiles($event)" accept="image/*,.pdf,.doc,.docx">
+                    <div class="file-list" x-show="newBroadcast.files.length > 0">
+                        <template x-for="(file, index) in newBroadcast.files" :key="index">
+                            <span class="file-tag">
+                                <span x-text="file.name"></span>
+                                <span class="remove" @click="removeFile(index)">&times;</span>
+                            </span>
+                        </template>
+                    </div>
                 </div>
             </div>
             <button class="btn-primary" @click="createBroadcast()" :disabled="!newBroadcast.message || sending">
@@ -311,23 +592,30 @@
         function broadcastsApp() {
             return {
                 notifications: [],
+                library: [],
                 loading: false,
                 sending: false,
                 stats: { pending: 0, sent: 0, failed: 0 },
+                attachTab: 'library',
+                selectedLibraryFiles: [],
                 newBroadcast: {
                     message: '',
                     group: '',
                     files: []
                 },
+                editModal: {
+                    show: false,
+                    id: null,
+                    filename: ''
+                },
 
                 async init() {
-                    // Проверяем авторизацию
                     const token = localStorage.getItem('admin_token');
                     if (!token) {
                         window.location.href = 'login.html';
                         return;
                     }
-                    await this.loadNotifications();
+                    await Promise.all([this.loadNotifications(), this.loadLibrary()]);
                 },
 
                 async loadNotifications() {
@@ -346,7 +634,6 @@
                         const data = await resp.json();
                         this.notifications = data.notifications || [];
 
-                        // Считаем статистику
                         this.stats = { pending: 0, sent: 0, failed: 0 };
                         for (const n of this.notifications) {
                             if (n.status === 'pending') this.stats.pending++;
@@ -355,9 +642,98 @@
                         }
                     } catch (err) {
                         console.error('Ошибка загрузки:', err);
-                        alert('Ошибка загрузки рассылок');
                     } finally {
                         this.loading = false;
+                    }
+                },
+
+                async loadLibrary() {
+                    try {
+                        const token = localStorage.getItem('admin_token');
+                        const resp = await fetch('/api/admin/attachments', {
+                            headers: { 'Authorization': `Bearer ${token}` }
+                        });
+                        const data = await resp.json();
+                        this.library = data.attachments || [];
+                    } catch (err) {
+                        console.error('Ошибка загрузки библиотеки:', err);
+                    }
+                },
+
+                async uploadToLibrary(event) {
+                    const files = Array.from(event.target.files);
+                    const token = localStorage.getItem('admin_token');
+
+                    for (const file of files) {
+                        const formData = new FormData();
+                        formData.append('file', file);
+
+                        try {
+                            await fetch('/api/admin/attachments', {
+                                method: 'POST',
+                                headers: { 'Authorization': `Bearer ${token}` },
+                                body: formData
+                            });
+                        } catch (err) {
+                            console.error('Ошибка загрузки:', err);
+                        }
+                    }
+
+                    event.target.value = '';
+                    await this.loadLibrary();
+                },
+
+                toggleLibraryFile(fileId) {
+                    const idx = this.selectedLibraryFiles.indexOf(fileId);
+                    if (idx === -1) {
+                        this.selectedLibraryFiles.push(fileId);
+                    } else {
+                        this.selectedLibraryFiles.splice(idx, 1);
+                    }
+                },
+
+                getLibraryFilename(fileId) {
+                    const file = this.library.find(f => f.id === fileId);
+                    return file ? file.filename : 'Unknown';
+                },
+
+                openEditModal(file) {
+                    this.editModal.id = file.id;
+                    this.editModal.filename = file.filename;
+                    this.editModal.show = true;
+                },
+
+                async renameAttachment() {
+                    const token = localStorage.getItem('admin_token');
+                    try {
+                        await fetch(`/api/admin/attachments/${this.editModal.id}`, {
+                            method: 'PATCH',
+                            headers: {
+                                'Authorization': `Bearer ${token}`,
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify({ filename: this.editModal.filename })
+                        });
+                        this.editModal.show = false;
+                        await this.loadLibrary();
+                    } catch (err) {
+                        alert('Ошибка переименования: ' + err.message);
+                    }
+                },
+
+                async deleteFromLibrary(fileId) {
+                    if (!confirm('Удалить файл из библиотеки?')) return;
+
+                    const token = localStorage.getItem('admin_token');
+                    try {
+                        await fetch(`/api/admin/attachments/${fileId}`, {
+                            method: 'DELETE',
+                            headers: { 'Authorization': `Bearer ${token}` }
+                        });
+                        this.selectedLibraryFiles = this.selectedLibraryFiles.filter(id => id !== fileId);
+                        await this.loadLibrary();
+                    } catch (err) {
+                        alert('Ошибка удаления: ' + err.message);
                     }
                 },
 
@@ -393,14 +769,32 @@
                             })
                         });
 
-                        if (!resp.ok) {
-                            throw new Error('Ошибка создания рассылки');
-                        }
+                        if (!resp.ok) throw new Error('Ошибка создания рассылки');
 
                         const result = await resp.json();
                         const notificationId = result.notification.id;
 
-                        // 2. Загружаем файлы
+                        // 2. Копируем файлы из библиотеки в папку уведомления
+                        for (const fileId of this.selectedLibraryFiles) {
+                            const file = this.library.find(f => f.id === fileId);
+                            if (file) {
+                                // Загружаем файл из библиотеки и пересылаем
+                                const fileResp = await fetch(`/api/admin/attachments/${fileId}/file`, {
+                                    headers: { 'Authorization': `Bearer ${token}` }
+                                });
+                                const blob = await fileResp.blob();
+                                const formData = new FormData();
+                                formData.append('file', blob, file.filename);
+
+                                await fetch(`/api/admin/notifications/${notificationId}/attachments`, {
+                                    method: 'POST',
+                                    headers: { 'Authorization': `Bearer ${token}` },
+                                    body: formData
+                                });
+                            }
+                        }
+
+                        // 3. Загружаем новые файлы
                         for (const file of this.newBroadcast.files) {
                             const formData = new FormData();
                             formData.append('file', file);
@@ -412,17 +806,28 @@
                             });
                         }
 
-                        // 3. Сбрасываем форму и обновляем список
+                        // 4. Сбрасываем форму
                         this.newBroadcast = { message: '', group: '', files: [] };
+                        this.selectedLibraryFiles = [];
                         await this.loadNotifications();
 
-                        alert('Рассылка создана! Сообщения будут отправлены автоматически.');
+                        alert('Рассылка создана!');
                     } catch (err) {
                         console.error('Ошибка:', err);
                         alert('Ошибка создания рассылки: ' + err.message);
                     } finally {
                         this.sending = false;
                     }
+                },
+
+                isImage(mimeType) {
+                    return mimeType && mimeType.startsWith('image/');
+                },
+
+                formatSize(bytes) {
+                    if (bytes < 1024) return bytes + ' B';
+                    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+                    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
                 },
 
                 formatDate(dateStr) {

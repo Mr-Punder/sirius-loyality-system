@@ -769,10 +769,8 @@ func (ub *UserBot) processNotifications() {
 				continue
 			}
 
-			// Отправляем вложения
-			for _, attachment := range notification.Attachments {
-				filePath := filepath.Join("data", "attachments", notification.Id, attachment)
-
+			// Отправляем вложения (attachment содержит полный путь к файлу в библиотеке)
+			for _, filePath := range notification.Attachments {
 				// Проверяем существование файла
 				if _, err := os.Stat(filePath); os.IsNotExist(err) {
 					ub.logger.Errorf("Файл вложения не найден: %s", filePath)
@@ -780,7 +778,8 @@ func (ub *UserBot) processNotifications() {
 				}
 
 				// Определяем тип по расширению
-				ext := strings.ToLower(filepath.Ext(attachment))
+				ext := strings.ToLower(filepath.Ext(filePath))
+				filename := filepath.Base(filePath)
 
 				switch ext {
 				case ".jpg", ".jpeg", ".png", ".gif":
@@ -789,13 +788,13 @@ func (ub *UserBot) processNotifications() {
 				default:
 					doc := &tele.Document{
 						File:     tele.FromDisk(filePath),
-						FileName: attachment,
+						FileName: filename,
 					}
 					_, err = ub.bot.Send(recipient, doc)
 				}
 
 				if err != nil {
-					ub.logger.Errorf("Ошибка отправки вложения %s пользователю %d: %v", attachment, telegramID, err)
+					ub.logger.Errorf("Ошибка отправки вложения %s пользователю %d: %v", filePath, telegramID, err)
 				}
 
 				time.Sleep(50 * time.Millisecond) // Задержка между вложениями

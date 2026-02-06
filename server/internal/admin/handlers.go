@@ -194,6 +194,13 @@ func (ah *AdminHandler) RegisterRoutes(r chi.Router) {
 			r.Get("/notifications", ah.handleGetNotifications)
 			r.Post("/notifications", ah.handleCreateNotification)
 			r.Post("/notifications/{id}/attachments", ah.handleUploadAttachment)
+
+			// Библиотека файлов
+			r.Get("/attachments", ah.handleGetAttachments)
+			r.Post("/attachments", ah.handleUploadToLibrary)
+			r.Patch("/attachments/{id}", ah.handleRenameAttachment)
+			r.Delete("/attachments/{id}", ah.handleDeleteAttachment)
+			r.Get("/attachments/{id}/file", ah.handleServeAttachment)
 		})
 	})
 }
@@ -931,7 +938,7 @@ func (ah *AdminHandler) handleCreateNotification(w http.ResponseWriter, r *http.
 	})
 }
 
-// handleUploadAttachment обрабатывает загрузку файла для рассылки
+// handleUploadAttachment обрабатывает загрузку файла для рассылки (сохраняет в библиотеку)
 func (ah *AdminHandler) handleUploadAttachment(w http.ResponseWriter, r *http.Request) {
 	notificationId := chi.URLParam(r, "id")
 	ah.logger.Infof("Загрузка вложения для рассылки %s", notificationId)
@@ -966,17 +973,22 @@ func (ah *AdminHandler) handleUploadAttachment(w http.ResponseWriter, r *http.Re
 	}
 	defer file.Close()
 
-	// Создаём директорию для вложений
-	attachDir := filepath.Join("data", "attachments", notificationId)
-	if err := os.MkdirAll(attachDir, 0755); err != nil {
+	// Создаём директорию библиотеки
+	libraryDir := filepath.Join("data", "library")
+	if err := os.MkdirAll(libraryDir, 0755); err != nil {
 		ah.logger.Errorf("Ошибка создания директории: %v", err)
 		http.Error(w, "Ошибка сохранения файла", http.StatusInternalServerError)
 		return
 	}
 
+	// Генерируем уникальное имя файла
+	originalFilename := filepath.Base(header.Filename)
+	fileId := uuid.New()
+	ext := filepath.Ext(originalFilename)
+	storedFilename := fileId.String() + ext
+	dstPath := filepath.Join(libraryDir, storedFilename)
+
 	// Сохраняем файл
-	filename := header.Filename
-	dstPath := filepath.Join(attachDir, filename)
 	dst, err := os.Create(dstPath)
 	if err != nil {
 		ah.logger.Errorf("Ошибка создания файла: %v", err)
@@ -985,27 +997,360 @@ func (ah *AdminHandler) handleUploadAttachment(w http.ResponseWriter, r *http.Re
 	}
 	defer dst.Close()
 
-	if _, err := io.Copy(dst, file); err != nil {
+	written, err := io.Copy(dst, file)
+	if err != nil {
 		ah.logger.Errorf("Ошибка записи файла: %v", err)
 		http.Error(w, "Ошибка сохранения файла", http.StatusInternalServerError)
 		return
 	}
 
-	// Обновляем notification
-	notification.Attachments = append(notification.Attachments, filename)
+	// Сохраняем полный путь к файлу в notification.Attachments
+	notification.Attachments = append(notification.Attachments, dstPath)
 	if err := ah.store.UpdateNotification(notification); err != nil {
 		ah.logger.Errorf("Ошибка обновления рассылки: %v", err)
 		http.Error(w, "Ошибка обновления рассылки", http.StatusInternalServerError)
 		return
 	}
 
-	ah.logger.Infof("Файл %s загружен для рассылки %s", filename, notificationId)
+	ah.logger.Infof("Файл %s загружен в библиотеку как %s для рассылки %s", originalFilename, dstPath, notificationId)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"success":  true,
-		"filename": filename,
+		"filename": originalFilename,
+		"path":     dstPath,
+		"size":     written,
 	})
+}
+
+// ==================== БИБЛИОТЕКА ФАЙЛОВ ====================
+
+// handleGetAttachments возвращает список всех файлов в библиотеке
+func (ah *AdminHandler) handleGetAttachments(w http.ResponseWriter, r *http.Request) {
+	ah.logger.Info("Запрос на получение списка файлов")
+
+	// Синхронизируем папку library с БД
+	ah.syncLibraryWithDB()
+
+	attachments, err := ah.store.GetAllAttachments()
+	if err != nil {
+		ah.logger.Errorf("Ошибка получения файлов: %v", err)
+		http.Error(w, "Внутренняя ошибка сервера", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"attachments": attachments,
+	})
+}
+
+// syncLibraryWithDB синхронизирует папку data/library с базой данных
+func (ah *AdminHandler) syncLibraryWithDB() {
+	libraryDir := filepath.Join("data", "library")
+
+	ah.logger.Info("Начинаем синхронизацию библиотеки с БД")
+
+	// Создаём директорию библиотеки если её нет
+	if err := os.MkdirAll(libraryDir, 0755); err != nil {
+		ah.logger.Errorf("Ошибка создания директории library: %v", err)
+		return
+	}
+
+	// Получаем все записи из БД
+	dbAttachments, err := ah.store.GetAllAttachments()
+	if err != nil {
+		ah.logger.Errorf("Ошибка получения списка файлов из БД: %v", err)
+		return
+	}
+
+	// Карта файлов в БД по пути
+	dbFiles := make(map[string]*models.Attachment)
+	for _, att := range dbAttachments {
+		dbFiles[att.StorePath] = att
+	}
+
+	// Сканируем папку library
+	filesInFolder := make(map[string]bool)
+	addedCount := 0
+
+	err = filepath.Walk(libraryDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			ah.logger.Errorf("Ошибка доступа к %s: %v", path, err)
+			return nil
+		}
+
+		if info.IsDir() {
+			return nil
+		}
+
+		filesInFolder[path] = true
+
+		// Если файл есть в папке, но нет в БД - добавляем
+		if _, exists := dbFiles[path]; !exists {
+			filename := info.Name()
+			ext := filepath.Ext(filename)
+
+			// Пытаемся извлечь UUID из имени файла
+			baseName := strings.TrimSuffix(filename, ext)
+			attachmentId, err := uuid.Parse(baseName)
+			if err != nil {
+				// Если имя не UUID, генерируем новый
+				attachmentId = uuid.New()
+			}
+
+			attachment := &models.Attachment{
+				Id:        attachmentId,
+				Filename:  filename,
+				StorePath: path,
+				MimeType:  getMimeType(ext),
+				Size:      info.Size(),
+				CreatedAt: info.ModTime(),
+			}
+
+			if err := ah.store.AddAttachment(attachment); err != nil {
+				ah.logger.Errorf("Ошибка добавления файла %s в БД: %v", path, err)
+			} else {
+				addedCount++
+				ah.logger.Infof("Добавлен файл в БД: %s", path)
+			}
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		ah.logger.Errorf("Ошибка обхода директории: %v", err)
+	}
+
+	// Удаляем из БД записи для файлов, которых нет в папке
+	removedCount := 0
+	for path, att := range dbFiles {
+		if !filesInFolder[path] {
+			if err := ah.store.DeleteAttachment(att.Id); err != nil {
+				ah.logger.Errorf("Ошибка удаления записи %s из БД: %v", att.Id, err)
+			} else {
+				removedCount++
+				ah.logger.Infof("Удалена запись из БД (файл отсутствует): %s", path)
+			}
+		}
+	}
+
+	ah.logger.Infof("Синхронизация завершена: добавлено %d, удалено %d", addedCount, removedCount)
+}
+
+// handleUploadToLibrary загружает файл в библиотеку
+func (ah *AdminHandler) handleUploadToLibrary(w http.ResponseWriter, r *http.Request) {
+	ah.logger.Info("Загрузка файла в библиотеку")
+
+	// Парсим multipart form (10 MB лимит)
+	if err := r.ParseMultipartForm(10 << 20); err != nil {
+		ah.logger.Errorf("Ошибка парсинга формы: %v", err)
+		http.Error(w, "Ошибка загрузки файла", http.StatusBadRequest)
+		return
+	}
+
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		ah.logger.Errorf("Ошибка получения файла: %v", err)
+		http.Error(w, "Файл не найден в запросе", http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	// Генерируем ID для файла
+	attachmentId := uuid.New()
+
+	// Создаём директорию для библиотеки
+	libraryDir := filepath.Join("data", "library")
+	if err := os.MkdirAll(libraryDir, 0755); err != nil {
+		ah.logger.Errorf("Ошибка создания директории: %v", err)
+		http.Error(w, "Ошибка сохранения файла", http.StatusInternalServerError)
+		return
+	}
+
+	// Определяем расширение файла
+	ext := filepath.Ext(header.Filename)
+	storePath := filepath.Join(libraryDir, attachmentId.String()+ext)
+
+	// Сохраняем файл
+	dst, err := os.Create(storePath)
+	if err != nil {
+		ah.logger.Errorf("Ошибка создания файла: %v", err)
+		http.Error(w, "Ошибка сохранения файла", http.StatusInternalServerError)
+		return
+	}
+	defer dst.Close()
+
+	written, err := io.Copy(dst, file)
+	if err != nil {
+		ah.logger.Errorf("Ошибка записи файла: %v", err)
+		http.Error(w, "Ошибка сохранения файла", http.StatusInternalServerError)
+		return
+	}
+
+	// Определяем MIME-тип
+	mimeType := header.Header.Get("Content-Type")
+	if mimeType == "" {
+		mimeType = "application/octet-stream"
+	}
+
+	// Создаём запись в БД
+	attachment := &models.Attachment{
+		Id:        attachmentId,
+		Filename:  header.Filename,
+		StorePath: storePath,
+		MimeType:  mimeType,
+		Size:      written,
+		CreatedAt: time.Now(),
+	}
+
+	if err := ah.store.AddAttachment(attachment); err != nil {
+		ah.logger.Errorf("Ошибка сохранения в БД: %v", err)
+		os.Remove(storePath) // Удаляем файл если не удалось сохранить в БД
+		http.Error(w, "Ошибка сохранения файла", http.StatusInternalServerError)
+		return
+	}
+
+	ah.logger.Infof("Файл %s загружен в библиотеку с ID %s", header.Filename, attachmentId)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":    true,
+		"attachment": attachment,
+	})
+}
+
+// handleRenameAttachment переименовывает файл
+func (ah *AdminHandler) handleRenameAttachment(w http.ResponseWriter, r *http.Request) {
+	attachmentId := chi.URLParam(r, "id")
+	ah.logger.Infof("Переименование файла %s", attachmentId)
+
+	attachmentUUID, err := uuid.Parse(attachmentId)
+	if err != nil {
+		http.Error(w, "Неверный ID файла", http.StatusBadRequest)
+		return
+	}
+
+	var request struct {
+		Filename string `json:"filename"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		http.Error(w, "Неверный формат запроса", http.StatusBadRequest)
+		return
+	}
+
+	if request.Filename == "" {
+		http.Error(w, "Имя файла не может быть пустым", http.StatusBadRequest)
+		return
+	}
+
+	attachment, err := ah.store.GetAttachment(attachmentUUID)
+	if err != nil {
+		http.Error(w, "Файл не найден", http.StatusNotFound)
+		return
+	}
+
+	attachment.Filename = request.Filename
+	if err := ah.store.UpdateAttachment(attachment); err != nil {
+		ah.logger.Errorf("Ошибка обновления файла: %v", err)
+		http.Error(w, "Ошибка обновления файла", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":    true,
+		"attachment": attachment,
+	})
+}
+
+// handleDeleteAttachment удаляет файл из библиотеки
+func (ah *AdminHandler) handleDeleteAttachment(w http.ResponseWriter, r *http.Request) {
+	attachmentId := chi.URLParam(r, "id")
+	ah.logger.Infof("Удаление файла %s", attachmentId)
+
+	attachmentUUID, err := uuid.Parse(attachmentId)
+	if err != nil {
+		http.Error(w, "Неверный ID файла", http.StatusBadRequest)
+		return
+	}
+
+	attachment, err := ah.store.GetAttachment(attachmentUUID)
+	if err != nil {
+		http.Error(w, "Файл не найден", http.StatusNotFound)
+		return
+	}
+
+	// Удаляем файл с диска
+	if err := os.Remove(attachment.StorePath); err != nil && !os.IsNotExist(err) {
+		ah.logger.Errorf("Ошибка удаления файла с диска: %v", err)
+	}
+
+	// Удаляем запись из БД
+	if err := ah.store.DeleteAttachment(attachmentUUID); err != nil {
+		ah.logger.Errorf("Ошибка удаления из БД: %v", err)
+		http.Error(w, "Ошибка удаления файла", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]bool{"success": true})
+}
+
+// getMimeType возвращает MIME-тип по расширению файла
+func getMimeType(ext string) string {
+	switch strings.ToLower(ext) {
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".png":
+		return "image/png"
+	case ".gif":
+		return "image/gif"
+	case ".webp":
+		return "image/webp"
+	case ".pdf":
+		return "application/pdf"
+	case ".doc":
+		return "application/msword"
+	case ".docx":
+		return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+	case ".xls":
+		return "application/vnd.ms-excel"
+	case ".xlsx":
+		return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+	case ".txt":
+		return "text/plain"
+	default:
+		return "application/octet-stream"
+	}
+}
+
+// handleServeAttachment отдаёт файл для превью/скачивания
+func (ah *AdminHandler) handleServeAttachment(w http.ResponseWriter, r *http.Request) {
+	attachmentId := chi.URLParam(r, "id")
+
+	attachmentUUID, err := uuid.Parse(attachmentId)
+	if err != nil {
+		http.Error(w, "Неверный ID файла", http.StatusBadRequest)
+		return
+	}
+
+	attachment, err := ah.store.GetAttachment(attachmentUUID)
+	if err != nil {
+		http.Error(w, "Файл не найден", http.StatusNotFound)
+		return
+	}
+
+	// Проверяем существование файла
+	if _, err := os.Stat(attachment.StorePath); os.IsNotExist(err) {
+		http.Error(w, "Файл не найден на диске", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", attachment.MimeType)
+	w.Header().Set("Content-Disposition", "inline; filename=\""+attachment.Filename+"\"")
+	http.ServeFile(w, r, attachment.StorePath)
 }
 
 // ServeStaticFiles обслуживает статические файлы для админки

@@ -15,6 +15,7 @@ type Memstorage struct {
 	puzzlePieces  sync.Map // string -> *models.PuzzlePiece
 	admins        sync.Map // int64 -> *models.Admin
 	notifications sync.Map // uuid.UUID -> *models.Notification
+	attachments   sync.Map // uuid.UUID -> *models.Attachment
 }
 
 func NewMemstorage() *Memstorage {
@@ -421,4 +422,51 @@ func (m *Memstorage) GetAllNotifications() ([]*models.Notification, error) {
 	})
 
 	return notifications, nil
+}
+
+// ==================== МЕТОДЫ ДЛЯ БИБЛИОТЕКИ ВЛОЖЕНИЙ ====================
+
+func (m *Memstorage) AddAttachment(attachment *models.Attachment) error {
+	m.attachments.Store(attachment.Id, attachment)
+	return nil
+}
+
+func (m *Memstorage) GetAttachment(id uuid.UUID) (*models.Attachment, error) {
+	attachmentVal, ok := m.attachments.Load(id)
+	if !ok {
+		return nil, errors.New("attachment not found")
+	}
+	return attachmentVal.(*models.Attachment), nil
+}
+
+func (m *Memstorage) GetAllAttachments() ([]*models.Attachment, error) {
+	var attachments []*models.Attachment
+
+	m.attachments.Range(func(key, value interface{}) bool {
+		attachment := value.(*models.Attachment)
+		attachments = append(attachments, attachment)
+		return true
+	})
+
+	return attachments, nil
+}
+
+func (m *Memstorage) UpdateAttachment(attachment *models.Attachment) error {
+	_, ok := m.attachments.Load(attachment.Id)
+	if !ok {
+		return errors.New("attachment not found")
+	}
+
+	m.attachments.Store(attachment.Id, attachment)
+	return nil
+}
+
+func (m *Memstorage) DeleteAttachment(id uuid.UUID) error {
+	_, ok := m.attachments.Load(id)
+	if !ok {
+		return errors.New("attachment not found")
+	}
+
+	m.attachments.Delete(id)
+	return nil
 }

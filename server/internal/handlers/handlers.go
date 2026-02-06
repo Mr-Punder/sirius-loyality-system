@@ -1301,7 +1301,7 @@ func (h *Handler) UpdateNotificationHandler(w http.ResponseWriter, r *http.Reque
 	})
 }
 
-// UploadAttachmentHandler загружает файл для уведомления
+// UploadAttachmentHandler загружает файл для уведомления в библиотеку
 func (h *Handler) UploadAttachmentHandler(w http.ResponseWriter, r *http.Request) {
 	h.logger.Info("Entered UploadAttachmentHandler")
 
@@ -1342,19 +1342,24 @@ func (h *Handler) UploadAttachmentHandler(w http.ResponseWriter, r *http.Request
 	}
 	defer file.Close()
 
-	// Создаём директорию для вложений
-	attachDir := filepath.Join("data", "attachments", idStr)
-	if err := os.MkdirAll(attachDir, 0755); err != nil {
+	// Создаём директорию библиотеки
+	libraryDir := filepath.Join("data", "library")
+	if err := os.MkdirAll(libraryDir, 0755); err != nil {
 		h.logger.Errorf("Ошибка создания директории: %v", err)
 		http.Error(w, "Ошибка сохранения файла", http.StatusInternalServerError)
 		return
 	}
 
 	// Безопасное имя файла (убираем путь, оставляем только имя)
-	filename := filepath.Base(header.Filename)
+	originalFilename := filepath.Base(header.Filename)
+
+	// Генерируем уникальное имя файла (uuid + расширение)
+	fileId := uuid.New()
+	ext := filepath.Ext(originalFilename)
+	storedFilename := fileId.String() + ext
+	dstPath := filepath.Join(libraryDir, storedFilename)
 
 	// Сохраняем файл
-	dstPath := filepath.Join(attachDir, filename)
 	dst, err := os.Create(dstPath)
 	if err != nil {
 		h.logger.Errorf("Ошибка создания файла: %v", err)
@@ -1369,21 +1374,22 @@ func (h *Handler) UploadAttachmentHandler(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Обновляем notification.Attachments в БД
-	notification.Attachments = append(notification.Attachments, filename)
+	// Сохраняем путь к файлу в notification.Attachments
+	notification.Attachments = append(notification.Attachments, dstPath)
 	if err := h.storage.UpdateNotification(notification); err != nil {
 		h.logger.Errorf("Ошибка обновления уведомления: %v", err)
 		http.Error(w, "Ошибка обновления уведомления", http.StatusInternalServerError)
 		return
 	}
 
-	h.logger.Infof("Файл %s загружен для уведомления %s", filename, idStr)
+	h.logger.Infof("Файл %s загружен в библиотеку как %s для уведомления %s", originalFilename, dstPath, idStr)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"success":  true,
-		"filename": filename,
+		"filename": originalFilename,
+		"path":     dstPath,
 	})
 }
 

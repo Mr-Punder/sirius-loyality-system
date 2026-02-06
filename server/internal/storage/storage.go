@@ -46,4 +46,11 @@ type Storage interface {
 	UpdateNotification(notification *models.Notification) error
 	GetNotification(id uuid.UUID) (*models.Notification, error)
 	GetAllNotifications() ([]*models.Notification, error)
+
+	// Методы для библиотеки вложений
+	AddAttachment(attachment *models.Attachment) error
+	GetAttachment(id uuid.UUID) (*models.Attachment, error)
+	GetAllAttachments() ([]*models.Attachment, error)
+	UpdateAttachment(attachment *models.Attachment) error
+	DeleteAttachment(id uuid.UUID) error
 }

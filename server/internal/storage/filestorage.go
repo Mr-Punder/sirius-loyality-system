@@ -20,6 +20,7 @@ const (
 	PuzzlePiecesFileName  = "puzzle_pieces.json"
 	AdminsFileName        = "admins.json"
 	NotificationsFileName = "notifications.json"
+	AttachmentsFileName   = "attachments.json"
 )
 
 // Filestorage реализует интерфейс Storage с хранением данных в файлах
@@ -29,6 +30,7 @@ type Filestorage struct {
 	puzzlePieces  sync.Map // string -> *models.PuzzlePiece
 	admins        sync.Map // int64 -> *models.Admin
 	notifications sync.Map // uuid.UUID -> *models.Notification
+	attachments   sync.Map // uuid.UUID -> *models.Attachment
 	dataDir       string
 	mu            sync.Mutex
 }
@@ -69,6 +71,9 @@ func (fs *Filestorage) loadData() error {
 		return err
 	}
 	if err := fs.loadNotifications(); err != nil {
+		return err
+	}
+	if err := fs.loadAttachments(); err != nil {
 		return err
 	}
 	return nil
@@ -688,6 +693,107 @@ func (fs *Filestorage) loadNotifications() error {
 
 	for _, notification := range notifications {
 		fs.notifications.Store(notification.Id, notification)
+	}
+
+	return nil
+}
+
+// ==================== МЕТОДЫ ДЛЯ БИБЛИОТЕКИ ВЛОЖЕНИЙ ====================
+
+func (fs *Filestorage) AddAttachment(attachment *models.Attachment) error {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	fs.attachments.Store(attachment.Id, attachment)
+	return fs.saveAttachments()
+}
+
+func (fs *Filestorage) GetAttachment(id uuid.UUID) (*models.Attachment, error) {
+	attachmentVal, ok := fs.attachments.Load(id)
+	if !ok {
+		return nil, errors.New("attachment not found")
+	}
+	return attachmentVal.(*models.Attachment), nil
+}
+
+func (fs *Filestorage) GetAllAttachments() ([]*models.Attachment, error) {
+	var attachments []*models.Attachment
+
+	fs.attachments.Range(func(key, value interface{}) bool {
+		attachment := value.(*models.Attachment)
+		attachments = append(attachments, attachment)
+		return true
+	})
+
+	return attachments, nil
+}
+
+func (fs *Filestorage) UpdateAttachment(attachment *models.Attachment) error {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	_, ok := fs.attachments.Load(attachment.Id)
+	if !ok {
+		return errors.New("attachment not found")
+	}
+
+	fs.attachments.Store(attachment.Id, attachment)
+	return fs.saveAttachments()
+}
+
+func (fs *Filestorage) DeleteAttachment(id uuid.UUID) error {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	_, ok := fs.attachments.Load(id)
+	if !ok {
+		return errors.New("attachment not found")
+	}
+
+	fs.attachments.Delete(id)
+	return fs.saveAttachments()
+}
+
+func (fs *Filestorage) saveAttachments() error {
+	var attachments []*models.Attachment
+
+	fs.attachments.Range(func(key, value interface{}) bool {
+		attachment := value.(*models.Attachment)
+		attachments = append(attachments, attachment)
+		return true
+	})
+
+	data, err := json.MarshalIndent(attachments, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal attachments: %w", err)
+	}
+
+	filePath := filepath.Join(fs.dataDir, AttachmentsFileName)
+	if err := os.WriteFile(filePath, data, 0644); err != nil {
+		return fmt.Errorf("failed to write attachments file: %w", err)
+	}
+
+	return nil
+}
+
+func (fs *Filestorage) loadAttachments() error {
+	filePath := filepath.Join(fs.dataDir, AttachmentsFileName)
+
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("failed to read attachments file: %w", err)
+	}
+
+	var attachments []*models.Attachment
+	if err := json.Unmarshal(data, &attachments); err != nil {
+		return fmt.Errorf("failed to unmarshal attachments: %w", err)
+	}
+
+	for _, attachment := range attachments {
+		fs.attachments.Store(attachment.Id, attachment)
 	}
 
 	return nil
