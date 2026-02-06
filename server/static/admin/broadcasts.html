@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Рассылки - Админ-панель</title>
+    <link rel="stylesheet" href="css/styles.css">
+    <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <style>
+        .form-card {
+            background: white;
+            padding: 1.5rem;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            margin-bottom: 1.5rem;
+        }
+
+        .form-card h3 {
+            margin-top: 0;
+            margin-bottom: 1rem;
+            color: #333;
+        }
+
+        .form-group {
+            margin-bottom: 1rem;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-weight: 500;
+            color: #555;
+        }
+
+        .form-group textarea {
+            width: 100%;
+            min-height: 100px;
+            padding: 0.75rem;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-family: inherit;
+            font-size: 14px;
+            resize: vertical;
+        }
+
+        .form-group input[type="text"],
+        .form-group select {
+            width: 100%;
+            padding: 0.75rem;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+
+        .form-group input[type="file"] {
+            padding: 0.5rem 0;
+        }
+
+        .file-list {
+            margin-top: 0.5rem;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+        }
+
+        .file-tag {
+            background: #e3f2fd;
+            color: #1976d2;
+            padding: 0.25rem 0.75rem;
+            border-radius: 16px;
+            font-size: 13px;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .file-tag .remove {
+            cursor: pointer;
+            color: #f44336;
+            font-weight: bold;
+        }
+
+        .btn-primary {
+            background: #3498db;
+            color: white;
+            border: none;
+            padding: 0.75rem 1.5rem;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        .btn-primary:hover {
+            background: #2980b9;
+        }
+
+        .btn-primary:disabled {
+            background: #bdc3c7;
+            cursor: not-allowed;
+        }
+
+        .stat-cards {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .stat-card {
+            background: white;
+            padding: 1rem 1.5rem;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            text-align: center;
+            flex: 1;
+        }
+
+        .stat-value {
+            font-size: 2rem;
+            font-weight: bold;
+            color: #3498db;
+        }
+
+        .stat-value.pending {
+            color: #f39c12;
+        }
+
+        .stat-value.sent {
+            color: #27ae60;
+        }
+
+        .stat-value.failed {
+            color: #e74c3c;
+        }
+
+        .stat-label {
+            color: #666;
+            font-size: 14px;
+            margin-top: 0.25rem;
+        }
+
+        .status-badge {
+            padding: 0.25rem 0.75rem;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+
+        .status-badge.pending {
+            background: #fff3cd;
+            color: #856404;
+        }
+
+        .status-badge.sent {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .status-badge.failed {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .message-preview {
+            max-width: 300px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(255, 255, 255, 0.8);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+
+        .loading-spinner {
+            font-size: 1.5rem;
+            color: #3498db;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container" x-data="broadcastsApp()" x-init="init()">
+        <!-- Оверлей загрузки -->
+        <div class="loading-overlay" x-show="sending" x-cloak>
+            <div class="loading-spinner">Отправка...</div>
+        </div>
+
+        <!-- Навигация -->
+        <div class="nav">
+            <a href="users.html" class="nav-item">Пользователи</a>
+            <a href="puzzles.html" class="nav-item">Пазлы</a>
+            <a href="pieces.html" class="nav-item">Детали</a>
+            <a href="broadcasts.html" class="nav-item active">Рассылки</a>
+            <a href="admins.html" class="nav-item">Администраторы</a>
+            <a href="#" class="nav-item" @click.prevent="logout()">Выход</a>
+        </div>
+
+        <!-- Заголовок -->
+        <div class="header">
+            <h1>Рассылки</h1>
+            <div class="actions">
+                <button @click="loadNotifications()">Обновить</button>
+            </div>
+        </div>
+
+        <!-- Статистика -->
+        <div class="stat-cards">
+            <div class="stat-card">
+                <div class="stat-value pending" x-text="stats.pending"></div>
+                <div class="stat-label">Ожидают</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value sent" x-text="stats.sent"></div>
+                <div class="stat-label">Отправлено</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value failed" x-text="stats.failed"></div>
+                <div class="stat-label">Ошибки</div>
+            </div>
+        </div>
+
+        <!-- Форма создания -->
+        <div class="form-card">
+            <h3>Новая рассылка</h3>
+            <div class="form-group">
+                <label for="message">Сообщение</label>
+                <textarea id="message" x-model="newBroadcast.message" placeholder="Введите текст сообщения..."></textarea>
+            </div>
+            <div class="form-group">
+                <label for="group">Группа (пусто = всем)</label>
+                <select id="group" x-model="newBroadcast.group">
+                    <option value="">Все пользователи</option>
+                    <option value="Н1">Н1</option>
+                    <option value="Н2">Н2</option>
+                    <option value="Н3">Н3</option>
+                    <option value="Н4">Н4</option>
+                    <option value="Н5">Н5</option>
+                    <option value="Н6">Н6</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Файлы (фото, документы)</label>
+                <input type="file" multiple @change="handleFiles($event)" accept="image/*,.pdf,.doc,.docx">
+                <div class="file-list" x-show="newBroadcast.files.length > 0">
+                    <template x-for="(file, index) in newBroadcast.files" :key="index">
+                        <span class="file-tag">
+                            <span x-text="file.name"></span>
+                            <span class="remove" @click="removeFile(index)">&times;</span>
+                        </span>
+                    </template>
+                </div>
+            </div>
+            <button class="btn-primary" @click="createBroadcast()" :disabled="!newBroadcast.message || sending">
+                Создать рассылку
+            </button>
+        </div>
+
+        <!-- Таблица рассылок -->
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Дата</th>
+                        <th>Сообщение</th>
+                        <th>Группа</th>
+                        <th>Файлы</th>
+                        <th>Статус</th>
+                        <th>Результат</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <template x-if="loading">
+                        <tr>
+                            <td colspan="6" style="text-align: center;">Загрузка...</td>
+                        </tr>
+                    </template>
+                    <template x-if="!loading && notifications.length === 0">
+                        <tr>
+                            <td colspan="6" style="text-align: center;">Нет рассылок</td>
+                        </tr>
+                    </template>
+                    <template x-for="n in notifications" :key="n.id">
+                        <tr>
+                            <td x-text="formatDate(n.created_at)"></td>
+                            <td class="message-preview" :title="n.message" x-text="truncate(n.message, 50)"></td>
+                            <td x-text="n.group || 'Все'"></td>
+                            <td x-text="n.attachments ? n.attachments.length : 0"></td>
+                            <td>
+                                <span class="status-badge" :class="n.status" x-text="getStatusText(n.status)"></span>
+                            </td>
+                            <td x-text="n.sent_count + ' / ' + (n.sent_count + n.error_count)"></td>
+                        </tr>
+                    </template>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        function broadcastsApp() {
+            return {
+                notifications: [],
+                loading: false,
+                sending: false,
+                stats: { pending: 0, sent: 0, failed: 0 },
+                newBroadcast: {
+                    message: '',
+                    group: '',
+                    files: []
+                },
+
+                async init() {
+                    // Проверяем авторизацию
+                    const token = localStorage.getItem('admin_token');
+                    if (!token) {
+                        window.location.href = 'login.html';
+                        return;
+                    }
+                    await this.loadNotifications();
+                },
+
+                async loadNotifications() {
+                    this.loading = true;
+                    try {
+                        const token = localStorage.getItem('admin_token');
+                        const resp = await fetch('/api/admin/notifications', {
+                            headers: { 'Authorization': `Bearer ${token}` }
+                        });
+
+                        if (resp.status === 401) {
+                            window.location.href = 'login.html';
+                            return;
+                        }
+
+                        const data = await resp.json();
+                        this.notifications = data.notifications || [];
+
+                        // Считаем статистику
+                        this.stats = { pending: 0, sent: 0, failed: 0 };
+                        for (const n of this.notifications) {
+                            if (n.status === 'pending') this.stats.pending++;
+                            else if (n.status === 'sent') this.stats.sent++;
+                            else if (n.status === 'failed') this.stats.failed++;
+                        }
+                    } catch (err) {
+                        console.error('Ошибка загрузки:', err);
+                        alert('Ошибка загрузки рассылок');
+                    } finally {
+                        this.loading = false;
+                    }
+                },
+
+                handleFiles(event) {
+                    const files = Array.from(event.target.files);
+                    this.newBroadcast.files = [...this.newBroadcast.files, ...files];
+                },
+
+                removeFile(index) {
+                    this.newBroadcast.files.splice(index, 1);
+                },
+
+                async createBroadcast() {
+                    if (!this.newBroadcast.message) {
+                        alert('Введите текст сообщения');
+                        return;
+                    }
+
+                    this.sending = true;
+                    try {
+                        const token = localStorage.getItem('admin_token');
+
+                        // 1. Создаём уведомление
+                        const resp = await fetch('/api/admin/notifications', {
+                            method: 'POST',
+                            headers: {
+                                'Authorization': `Bearer ${token}`,
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify({
+                                message: this.newBroadcast.message,
+                                group: this.newBroadcast.group
+                            })
+                        });
+
+                        if (!resp.ok) {
+                            throw new Error('Ошибка создания рассылки');
+                        }
+
+                        const result = await resp.json();
+                        const notificationId = result.notification.id;
+
+                        // 2. Загружаем файлы
+                        for (const file of this.newBroadcast.files) {
+                            const formData = new FormData();
+                            formData.append('file', file);
+
+                            await fetch(`/api/admin/notifications/${notificationId}/attachments`, {
+                                method: 'POST',
+                                headers: { 'Authorization': `Bearer ${token}` },
+                                body: formData
+                            });
+                        }
+
+                        // 3. Сбрасываем форму и обновляем список
+                        this.newBroadcast = { message: '', group: '', files: [] };
+                        await this.loadNotifications();
+
+                        alert('Рассылка создана! Сообщения будут отправлены автоматически.');
+                    } catch (err) {
+                        console.error('Ошибка:', err);
+                        alert('Ошибка создания рассылки: ' + err.message);
+                    } finally {
+                        this.sending = false;
+                    }
+                },
+
+                formatDate(dateStr) {
+                    if (!dateStr) return '-';
+                    const date = new Date(dateStr);
+                    return date.toLocaleString('ru-RU', {
+                        day: '2-digit',
+                        month: '2-digit',
+                        year: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit'
+                    });
+                },
+
+                truncate(str, length) {
+                    if (!str) return '';
+                    if (str.length <= length) return str;
+                    return str.substring(0, length) + '...';
+                },
+
+                getStatusText(status) {
+                    switch (status) {
+                        case 'pending': return 'Ожидает';
+                        case 'sent': return 'Отправлено';
+                        case 'failed': return 'Ошибка';
+                        default: return status;
+                    }
+                },
+
+                logout() {
+                    localStorage.removeItem('admin_token');
+                    localStorage.removeItem('token_expires');
+                    document.cookie = 'admin_token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
+                    window.location.href = 'login.html';
+                }
+            }
+        }
+    </script>
+</body>
+
+</html>

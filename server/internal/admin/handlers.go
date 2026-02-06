@@ -2,8 +2,10 @@ package admin
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -187,6 +189,11 @@ func (ah *AdminHandler) RegisterRoutes(r chi.Router) {
 			r.Get("/admins", ah.handleGetAdmins)
 			r.Post("/admins/add", ah.handleAddAdmin)
 			r.Post("/admins/remove", ah.handleRemoveAdmin)
+
+			// Рассылки
+			r.Get("/notifications", ah.handleGetNotifications)
+			r.Post("/notifications", ah.handleCreateNotification)
+			r.Post("/notifications/{id}/attachments", ah.handleUploadAttachment)
 		})
 	})
 }
@@ -854,6 +861,151 @@ func (ah *AdminHandler) handleDeleteUser(w http.ResponseWriter, r *http.Request)
 	// Отправляем ответ
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]bool{"success": true})
+}
+
+// handleGetNotifications обрабатывает запрос на получение списка рассылок
+func (ah *AdminHandler) handleGetNotifications(w http.ResponseWriter, r *http.Request) {
+	ah.logger.Info("Запрос на получение списка рассылок")
+
+	notifications, err := ah.store.GetAllNotifications()
+	if err != nil {
+		ah.logger.Errorf("Ошибка получения рассылок: %v", err)
+		http.Error(w, "Внутренняя ошибка сервера", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"notifications": notifications,
+	})
+}
+
+// handleCreateNotification обрабатывает запрос на создание рассылки
+func (ah *AdminHandler) handleCreateNotification(w http.ResponseWriter, r *http.Request) {
+	ah.logger.Info("Запрос на создание рассылки")
+
+	var request struct {
+		Message string   `json:"message"`
+		Group   string   `json:"group"`
+		UserIds []string `json:"user_ids,omitempty"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		ah.logger.Errorf("Ошибка декодирования запроса: %v", err)
+		http.Error(w, "Неверный формат запроса", http.StatusBadRequest)
+		return
+	}
+
+	if request.Message == "" {
+		http.Error(w, "Сообщение не может быть пустым", http.StatusBadRequest)
+		return
+	}
+
+	// Конвертируем user_ids в []uuid.UUID
+	var userIds []uuid.UUID
+	for _, idStr := range request.UserIds {
+		if id, err := uuid.Parse(idStr); err == nil {
+			userIds = append(userIds, id)
+		}
+	}
+
+	notification := &models.Notification{
+		Id:        uuid.New(),
+		Message:   request.Message,
+		Group:     request.Group,
+		UserIds:   userIds,
+		Status:    models.NotificationPending,
+		CreatedAt: time.Now(),
+	}
+
+	if err := ah.store.AddNotification(notification); err != nil {
+		ah.logger.Errorf("Ошибка создания рассылки: %v", err)
+		http.Error(w, "Ошибка создания рассылки", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":      true,
+		"notification": notification,
+	})
+}
+
+// handleUploadAttachment обрабатывает загрузку файла для рассылки
+func (ah *AdminHandler) handleUploadAttachment(w http.ResponseWriter, r *http.Request) {
+	notificationId := chi.URLParam(r, "id")
+	ah.logger.Infof("Загрузка вложения для рассылки %s", notificationId)
+
+	// Парсим notification ID
+	notifUUID, err := uuid.Parse(notificationId)
+	if err != nil {
+		http.Error(w, "Неверный ID рассылки", http.StatusBadRequest)
+		return
+	}
+
+	// Получаем notification
+	notification, err := ah.store.GetNotification(notifUUID)
+	if err != nil {
+		ah.logger.Errorf("Рассылка не найдена: %v", err)
+		http.Error(w, "Рассылка не найдена", http.StatusNotFound)
+		return
+	}
+
+	// Парсим multipart form (10 MB лимит)
+	if err := r.ParseMultipartForm(10 << 20); err != nil {
+		ah.logger.Errorf("Ошибка парсинга формы: %v", err)
+		http.Error(w, "Ошибка загрузки файла", http.StatusBadRequest)
+		return
+	}
+
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		ah.logger.Errorf("Ошибка получения файла: %v", err)
+		http.Error(w, "Файл не найден в запросе", http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	// Создаём директорию для вложений
+	attachDir := filepath.Join("data", "attachments", notificationId)
+	if err := os.MkdirAll(attachDir, 0755); err != nil {
+		ah.logger.Errorf("Ошибка создания директории: %v", err)
+		http.Error(w, "Ошибка сохранения файла", http.StatusInternalServerError)
+		return
+	}
+
+	// Сохраняем файл
+	filename := header.Filename
+	dstPath := filepath.Join(attachDir, filename)
+	dst, err := os.Create(dstPath)
+	if err != nil {
+		ah.logger.Errorf("Ошибка создания файла: %v", err)
+		http.Error(w, "Ошибка сохранения файла", http.StatusInternalServerError)
+		return
+	}
+	defer dst.Close()
+
+	if _, err := io.Copy(dst, file); err != nil {
+		ah.logger.Errorf("Ошибка записи файла: %v", err)
+		http.Error(w, "Ошибка сохранения файла", http.StatusInternalServerError)
+		return
+	}
+
+	// Обновляем notification
+	notification.Attachments = append(notification.Attachments, filename)
+	if err := ah.store.UpdateNotification(notification); err != nil {
+		ah.logger.Errorf("Ошибка обновления рассылки: %v", err)
+		http.Error(w, "Ошибка обновления рассылки", http.StatusInternalServerError)
+		return
+	}
+
+	ah.logger.Infof("Файл %s загружен для рассылки %s", filename, notificationId)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":  true,
+		"filename": filename,
+	})
 }
 
 // ServeStaticFiles обслуживает статические файлы для админки

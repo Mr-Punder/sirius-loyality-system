@@ -3,7 +3,10 @@ package telegrambot
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -758,16 +761,48 @@ func (ub *UserBot) processNotifications() {
 
 			recipient := &tele.User{ID: telegramID}
 
-			// TODO: поддержка вложений (attachments)
+			// Отправляем текстовое сообщение
 			_, err = ub.bot.Send(recipient, notification.Message)
 			if err != nil {
 				ub.logger.Errorf("Ошибка отправки уведомления пользователю %d: %v", telegramID, err)
 				errorCount++
-			} else {
-				sentCount++
+				continue
 			}
 
-			time.Sleep(50 * time.Millisecond) // Небольшая задержка между отправками
+			// Отправляем вложения
+			for _, attachment := range notification.Attachments {
+				filePath := filepath.Join("data", "attachments", notification.Id, attachment)
+
+				// Проверяем существование файла
+				if _, err := os.Stat(filePath); os.IsNotExist(err) {
+					ub.logger.Errorf("Файл вложения не найден: %s", filePath)
+					continue
+				}
+
+				// Определяем тип по расширению
+				ext := strings.ToLower(filepath.Ext(attachment))
+
+				switch ext {
+				case ".jpg", ".jpeg", ".png", ".gif":
+					photo := &tele.Photo{File: tele.FromDisk(filePath)}
+					_, err = ub.bot.Send(recipient, photo)
+				default:
+					doc := &tele.Document{
+						File:     tele.FromDisk(filePath),
+						FileName: attachment,
+					}
+					_, err = ub.bot.Send(recipient, doc)
+				}
+
+				if err != nil {
+					ub.logger.Errorf("Ошибка отправки вложения %s пользователю %d: %v", attachment, telegramID, err)
+				}
+
+				time.Sleep(50 * time.Millisecond) // Задержка между вложениями
+			}
+
+			sentCount++
+			time.Sleep(50 * time.Millisecond) // Небольшая задержка между пользователями
 		}
 
 		// Обновляем статус уведомления

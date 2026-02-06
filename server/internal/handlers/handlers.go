@@ -2,8 +2,12 @@ package handlers
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/MrPunder/sirius-loyality-system/internal/logger"
@@ -82,6 +86,8 @@ func NewRouter(logger logger.Logger, storage storage.Storage) chi.Router {
 			r.Get("/pending", handler.GetPendingNotificationsHandler)
 			r.Get("/{id}", handler.GetNotificationHandler)
 			r.Patch("/{id}", handler.UpdateNotificationHandler)
+			r.Post("/{id}/attachments", handler.UploadAttachmentHandler)
+			r.Get("/{id}/attachments/{filename}", handler.GetAttachmentHandler)
 		})
 
 		// Обработчик по умолчанию для неправильных запросов
@@ -1293,4 +1299,140 @@ func (h *Handler) UpdateNotificationHandler(w http.ResponseWriter, r *http.Reque
 		"success":      true,
 		"notification": notification,
 	})
+}
+
+// UploadAttachmentHandler загружает файл для уведомления
+func (h *Handler) UploadAttachmentHandler(w http.ResponseWriter, r *http.Request) {
+	h.logger.Info("Entered UploadAttachmentHandler")
+
+	// Получаем ID уведомления
+	idStr := chi.URLParam(r, "id")
+	if idStr == "" {
+		http.Error(w, "ID уведомления не указан", http.StatusBadRequest)
+		return
+	}
+
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		h.logger.Errorf("Неверный формат ID: %v", err)
+		http.Error(w, "Неверный формат ID", http.StatusBadRequest)
+		return
+	}
+
+	// Проверяем, существует ли уведомление
+	notification, err := h.storage.GetNotification(id)
+	if err != nil {
+		h.logger.Errorf("Уведомление не найдено: %v", err)
+		http.Error(w, "Уведомление не найдено", http.StatusNotFound)
+		return
+	}
+
+	// Парсим multipart форму (лимит 10 МБ)
+	if err := r.ParseMultipartForm(10 << 20); err != nil {
+		h.logger.Errorf("Ошибка парсинга формы: %v", err)
+		http.Error(w, "Ошибка загрузки файла", http.StatusBadRequest)
+		return
+	}
+
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		h.logger.Errorf("Ошибка получения файла: %v", err)
+		http.Error(w, "Файл не найден в запросе", http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	// Создаём директорию для вложений
+	attachDir := filepath.Join("data", "attachments", idStr)
+	if err := os.MkdirAll(attachDir, 0755); err != nil {
+		h.logger.Errorf("Ошибка создания директории: %v", err)
+		http.Error(w, "Ошибка сохранения файла", http.StatusInternalServerError)
+		return
+	}
+
+	// Безопасное имя файла (убираем путь, оставляем только имя)
+	filename := filepath.Base(header.Filename)
+
+	// Сохраняем файл
+	dstPath := filepath.Join(attachDir, filename)
+	dst, err := os.Create(dstPath)
+	if err != nil {
+		h.logger.Errorf("Ошибка создания файла: %v", err)
+		http.Error(w, "Ошибка сохранения файла", http.StatusInternalServerError)
+		return
+	}
+	defer dst.Close()
+
+	if _, err := io.Copy(dst, file); err != nil {
+		h.logger.Errorf("Ошибка записи файла: %v", err)
+		http.Error(w, "Ошибка сохранения файла", http.StatusInternalServerError)
+		return
+	}
+
+	// Обновляем notification.Attachments в БД
+	notification.Attachments = append(notification.Attachments, filename)
+	if err := h.storage.UpdateNotification(notification); err != nil {
+		h.logger.Errorf("Ошибка обновления уведомления: %v", err)
+		http.Error(w, "Ошибка обновления уведомления", http.StatusInternalServerError)
+		return
+	}
+
+	h.logger.Infof("Файл %s загружен для уведомления %s", filename, idStr)
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":  true,
+		"filename": filename,
+	})
+}
+
+// GetAttachmentHandler отдаёт файл вложения
+func (h *Handler) GetAttachmentHandler(w http.ResponseWriter, r *http.Request) {
+	h.logger.Info("Entered GetAttachmentHandler")
+
+	idStr := chi.URLParam(r, "id")
+	filename := chi.URLParam(r, "filename")
+
+	if idStr == "" || filename == "" {
+		http.Error(w, "ID или имя файла не указаны", http.StatusBadRequest)
+		return
+	}
+
+	// Валидируем ID
+	if _, err := uuid.Parse(idStr); err != nil {
+		http.Error(w, "Неверный формат ID", http.StatusBadRequest)
+		return
+	}
+
+	// Безопасный путь (защита от path traversal)
+	filename = filepath.Base(filename)
+	filePath := filepath.Join("data", "attachments", idStr, filename)
+
+	// Проверяем существование файла
+	if _, err := os.Stat(filePath); os.IsNotExist(err) {
+		http.Error(w, "Файл не найден", http.StatusNotFound)
+		return
+	}
+
+	// Определяем Content-Type по расширению
+	ext := strings.ToLower(filepath.Ext(filename))
+	contentType := "application/octet-stream"
+	switch ext {
+	case ".jpg", ".jpeg":
+		contentType = "image/jpeg"
+	case ".png":
+		contentType = "image/png"
+	case ".gif":
+		contentType = "image/gif"
+	case ".pdf":
+		contentType = "application/pdf"
+	case ".doc", ".docx":
+		contentType = "application/msword"
+	}
+
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Disposition", "attachment; filename="+filename)
+
+	http.ServeFile(w, r, filePath)
 }

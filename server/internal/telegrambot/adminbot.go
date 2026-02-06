@@ -3,6 +3,9 @@ package telegrambot
 import (
 	"encoding/json"
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -25,10 +28,11 @@ type AdminsList struct {
 
 // BotState представляет состояние бота для конкретного пользователя
 type BotState struct {
-	State       string
-	Params      map[string]string
-	LastMsgID   int
-	LastMsgText string
+	State        string
+	Params       map[string]string
+	Attachments  []string // Пути к загруженным файлам для рассылки
+	LastMsgID    int
+	LastMsgText  string
 }
 
 // AdminBot представляет бота для администраторов
@@ -143,6 +147,10 @@ func (ab *AdminBot) Start() error {
 	// Обработчик текстовых сообщений
 	ab.bot.Handle(tele.OnText, ab.handleText)
 
+	// Обработчики медиа для рассылок
+	ab.bot.Handle(tele.OnPhoto, ab.handleBroadcastPhoto)
+	ab.bot.Handle(tele.OnDocument, ab.handleBroadcastDocument)
+
 	// Запуск бота
 	go ab.bot.Start()
 
@@ -168,12 +176,20 @@ func (ab *AdminBot) handleText(c tele.Context) error {
 	case "broadcast_text":
 		return ab.handleBroadcastText(c, state)
 
+	case "broadcast_attachments":
+		if text == "✅ Готово" {
+			return ab.handleBroadcastAttachmentsDone(c, state)
+		}
+		// Если пользователь ввел текст вместо файла, напоминаем
+		keyboard := ab.createAttachmentKeyboard()
+		return c.Send("Отправьте фото или документ, или нажмите '✅ Готово' для продолжения.", keyboard)
+
 	case "broadcast_group":
 		if text == "🌐 Все группы" {
-			return ab.broadcastMessage(c, state.Params["text"], "")
+			return ab.broadcastMessage(c, state.Params["text"], "", state.Attachments)
 		} else if GroupRegex.MatchString(text) {
 			normalizedGroup, _ := NormalizeGroupName(text)
-			return ab.broadcastMessage(c, state.Params["text"], normalizedGroup)
+			return ab.broadcastMessage(c, state.Params["text"], normalizedGroup, state.Attachments)
 		} else {
 			return c.Send("Неверный формат группы. Группа должна быть от Н1 до Н6 (или H1 до H6).")
 		}
@@ -277,7 +293,7 @@ func (ab *AdminBot) handleGroupButton(c tele.Context) error {
 
 	switch state.State {
 	case "broadcast_group":
-		return ab.broadcastMessage(c, state.Params["text"], normalizedGroup)
+		return ab.broadcastMessage(c, state.Params["text"], normalizedGroup, state.Attachments)
 
 	case "user_by_group":
 		ab.logger.Infof("Пользователь %d выбрал группу %s для фильтрации", c.Sender().ID, normalizedGroup)
@@ -1098,6 +1114,27 @@ func (ab *AdminBot) createBroadcastKeyboard() *tele.ReplyMarkup {
 func (ab *AdminBot) handleBroadcastText(c tele.Context, state *BotState) error {
 	text := c.Text()
 	state.Params["text"] = text
+	state.State = "broadcast_attachments"
+	state.Attachments = nil // Очищаем предыдущие вложения
+
+	keyboard := ab.createAttachmentKeyboard()
+	return c.Send("Текст сохранён. Теперь вы можете:\n• Отправить фото или документ для добавления\n• Нажать '✅ Готово' для выбора группы", keyboard)
+}
+
+// createAttachmentKeyboard создает клавиатуру для добавления вложений
+func (ab *AdminBot) createAttachmentKeyboard() *tele.ReplyMarkup {
+	keyboard := &tele.ReplyMarkup{ResizeKeyboard: true}
+	btnDone := keyboard.Text("✅ Готово")
+	btnCancel := keyboard.Text("❌ Отмена")
+	keyboard.Reply(
+		keyboard.Row(btnDone),
+		keyboard.Row(btnCancel),
+	)
+	return keyboard
+}
+
+// handleBroadcastAttachmentsDone обрабатывает завершение добавления вложений
+func (ab *AdminBot) handleBroadcastAttachmentsDone(c tele.Context, state *BotState) error {
 	state.State = "broadcast_group"
 
 	keyboard := &tele.ReplyMarkup{ResizeKeyboard: true}
@@ -1116,11 +1153,17 @@ func (ab *AdminBot) handleBroadcastText(c tele.Context, state *BotState) error {
 		keyboard.Row(btnCancel),
 	)
 
-	return c.Send("Выберите группу для рассылки или нажмите кнопку 'Все группы':", keyboard)
+	attachCount := len(state.Attachments)
+	msg := "Выберите группу для рассылки или нажмите кнопку 'Все группы':"
+	if attachCount > 0 {
+		msg = fmt.Sprintf("Добавлено файлов: %d\n\n%s", attachCount, msg)
+	}
+
+	return c.Send(msg, keyboard)
 }
 
 // broadcastMessage создает уведомление для рассылки через очередь
-func (ab *AdminBot) broadcastMessage(c tele.Context, text string, group string) error {
+func (ab *AdminBot) broadcastMessage(c tele.Context, text string, group string, attachments []string) error {
 	// Создаем уведомление через API
 	notificationData := map[string]interface{}{
 		"message": text,
@@ -1143,6 +1186,19 @@ func (ab *AdminBot) broadcastMessage(c tele.Context, text string, group string) 
 	}
 	json.Unmarshal(responseData, &response)
 
+	// Загружаем файлы вложений
+	uploadedCount := 0
+	for _, attachPath := range attachments {
+		err := ab.uploadAttachment(response.Notification.Id, attachPath)
+		if err != nil {
+			ab.logger.Errorf("Ошибка загрузки вложения %s: %v", attachPath, err)
+		} else {
+			uploadedCount++
+		}
+		// Удаляем временный файл после загрузки
+		os.Remove(attachPath)
+	}
+
 	// Сбрасываем состояние
 	delete(ab.states, c.Sender().ID)
 	keyboard := ab.createMainKeyboard()
@@ -1152,7 +1208,12 @@ func (ab *AdminBot) broadcastMessage(c tele.Context, text string, group string) 
 		groupText = fmt.Sprintf("группе %s", group)
 	}
 
-	return c.Send(fmt.Sprintf("✅ Рассылка создана!\n\nСообщение будет отправлено %s в ближайшее время.", groupText), keyboard)
+	attachText := ""
+	if uploadedCount > 0 {
+		attachText = fmt.Sprintf("\nФайлов: %d", uploadedCount)
+	}
+
+	return c.Send(fmt.Sprintf("✅ Рассылка создана!%s\n\nСообщение будет отправлено %s в ближайшее время.", attachText, groupText), keyboard)
 }
 
 // handleAllGroupsButton обрабатывает нажатие на кнопку "Все группы"
@@ -1169,7 +1230,120 @@ func (ab *AdminBot) handleAllGroupsButton(c tele.Context) error {
 		return c.Send("Используйте кнопки для навигации или /help для просмотра доступных команд.", keyboard)
 	}
 
-	return ab.broadcastMessage(c, state.Params["text"], "")
+	return ab.broadcastMessage(c, state.Params["text"], "", state.Attachments)
+}
+
+// uploadAttachment загружает файл вложения на сервер
+func (ab *AdminBot) uploadAttachment(notificationId string, filePath string) error {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return fmt.Errorf("не удалось открыть файл: %w", err)
+	}
+	defer file.Close()
+
+	return ab.apiClient.PostFile("/notifications/"+notificationId+"/attachments", file, filepath.Base(filePath))
+}
+
+// handleBroadcastPhoto обрабатывает фото для рассылки
+func (ab *AdminBot) handleBroadcastPhoto(c tele.Context) error {
+	if !ab.isAdmin(c.Sender().ID) {
+		return nil
+	}
+
+	userID := c.Sender().ID
+	state, ok := ab.states[userID]
+	if !ok || state.State != "broadcast_attachments" {
+		return nil
+	}
+
+	photo := c.Message().Photo
+	if photo == nil {
+		return nil
+	}
+
+	// Скачиваем файл
+	reader, err := ab.bot.File(&photo.File)
+	if err != nil {
+		ab.logger.Errorf("Ошибка получения файла: %v", err)
+		return c.Send("Ошибка при загрузке фото. Попробуйте снова.")
+	}
+
+	// Сохраняем во временный файл
+	tempDir := filepath.Join("data", "temp")
+	os.MkdirAll(tempDir, 0755)
+
+	filename := fmt.Sprintf("photo_%d_%s.jpg", userID, photo.FileID[:8])
+	tempPath := filepath.Join(tempDir, filename)
+
+	tempFile, err := os.Create(tempPath)
+	if err != nil {
+		ab.logger.Errorf("Ошибка создания временного файла: %v", err)
+		return c.Send("Ошибка при сохранении фото. Попробуйте снова.")
+	}
+
+	_, err = io.Copy(tempFile, reader)
+	tempFile.Close()
+	if err != nil {
+		ab.logger.Errorf("Ошибка записи файла: %v", err)
+		os.Remove(tempPath)
+		return c.Send("Ошибка при сохранении фото. Попробуйте снова.")
+	}
+
+	state.Attachments = append(state.Attachments, tempPath)
+
+	keyboard := ab.createAttachmentKeyboard()
+	return c.Send(fmt.Sprintf("📷 Фото добавлено! Всего файлов: %d\n\nДобавьте ещё или нажмите '✅ Готово'", len(state.Attachments)), keyboard)
+}
+
+// handleBroadcastDocument обрабатывает документ для рассылки
+func (ab *AdminBot) handleBroadcastDocument(c tele.Context) error {
+	if !ab.isAdmin(c.Sender().ID) {
+		return nil
+	}
+
+	userID := c.Sender().ID
+	state, ok := ab.states[userID]
+	if !ok || state.State != "broadcast_attachments" {
+		return nil
+	}
+
+	doc := c.Message().Document
+	if doc == nil {
+		return nil
+	}
+
+	// Скачиваем файл
+	reader, err := ab.bot.File(&doc.File)
+	if err != nil {
+		ab.logger.Errorf("Ошибка получения файла: %v", err)
+		return c.Send("Ошибка при загрузке документа. Попробуйте снова.")
+	}
+
+	// Сохраняем во временный файл
+	tempDir := filepath.Join("data", "temp")
+	os.MkdirAll(tempDir, 0755)
+
+	filename := fmt.Sprintf("%d_%s", userID, doc.FileName)
+	tempPath := filepath.Join(tempDir, filename)
+
+	tempFile, err := os.Create(tempPath)
+	if err != nil {
+		ab.logger.Errorf("Ошибка создания временного файла: %v", err)
+		return c.Send("Ошибка при сохранении документа. Попробуйте снова.")
+	}
+
+	_, err = io.Copy(tempFile, reader)
+	tempFile.Close()
+	if err != nil {
+		ab.logger.Errorf("Ошибка записи файла: %v", err)
+		os.Remove(tempPath)
+		return c.Send("Ошибка при сохранении документа. Попробуйте снова.")
+	}
+
+	state.Attachments = append(state.Attachments, tempPath)
+
+	keyboard := ab.createAttachmentKeyboard()
+	return c.Send(fmt.Sprintf("📎 Документ '%s' добавлен! Всего файлов: %d\n\nДобавьте ещё или нажмите '✅ Готово'", doc.FileName, len(state.Attachments)), keyboard)
 }
 
 // handleHelp обрабатывает команду /help
