@@ -1,0 +1,564 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Детали пазлов - Админ-панель</title>
+    <link rel="stylesheet" href="css/styles.css">
+    <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+</head>
+
+<body>
+    <div class="container" x-data="piecesApp()" x-init="init">
+        <!-- Навигация -->
+        <div class="nav">
+            <a href="users.html" class="nav-item">Пользователи</a>
+            <a href="puzzles.html" class="nav-item">Пазлы</a>
+            <a href="pieces.html" class="nav-item active">Детали</a>
+            <a href="admins.html" class="nav-item">Администраторы</a>
+            <a href="#" class="nav-item" @click.prevent="logout">Выход</a>
+        </div>
+
+        <!-- Заголовок -->
+        <div class="header">
+            <h1>Детали пазлов</h1>
+            <div class="actions">
+                <button @click="showImportModal = true">Импорт деталей</button>
+                <button @click="refreshPieces">Обновить</button>
+            </div>
+        </div>
+
+        <!-- Статистика -->
+        <div class="stats-cards" x-show="!loading">
+            <div class="stat-card">
+                <div class="stat-value" x-text="totalPieces"></div>
+                <div class="stat-label">Всего деталей</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" x-text="registeredPieces"></div>
+                <div class="stat-label">Зарегистрировано</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" x-text="availablePieces"></div>
+                <div class="stat-label">Свободно</div>
+            </div>
+        </div>
+
+        <!-- Фильтры -->
+        <div class="filters">
+            <div class="filter-group">
+                <label for="puzzle-filter">Пазл</label>
+                <select id="puzzle-filter" x-model="filters.puzzleId" @change="applyFilters">
+                    <option value="">Все пазлы</option>
+                    <template x-for="i in 30" :key="i">
+                        <option :value="i" x-text="'Пазл ' + i"></option>
+                    </template>
+                </select>
+            </div>
+
+            <div class="filter-group">
+                <label for="status-filter">Статус</label>
+                <select id="status-filter" x-model="filters.status" @change="applyFilters">
+                    <option value="">Все</option>
+                    <option value="registered">Зарегистрированные</option>
+                    <option value="available">Свободные</option>
+                </select>
+            </div>
+
+            <div class="filter-group">
+                <label for="search">Поиск по коду</label>
+                <input type="text" id="search" x-model="filters.search" @input="applyFilters" placeholder="Введите код...">
+            </div>
+        </div>
+
+        <!-- Таблица деталей -->
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th class="sortable" :class="getSortClass('code')" @click="sortBy('code')">Код</th>
+                        <th class="sortable" :class="getSortClass('puzzle_id')" @click="sortBy('puzzle_id')">Пазл</th>
+                        <th class="sortable" :class="getSortClass('piece_number')" @click="sortBy('piece_number')">Деталь №</th>
+                        <th class="sortable" :class="getSortClass('owner_id')" @click="sortBy('owner_id')">Владелец</th>
+                        <th class="sortable" :class="getSortClass('registered_at')" @click="sortBy('registered_at')">Дата регистрации</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <template x-if="loading">
+                        <tr>
+                            <td colspan="5" style="text-align: center;">Загрузка...</td>
+                        </tr>
+                    </template>
+                    <template x-if="!loading && filteredPieces.length === 0">
+                        <tr>
+                            <td colspan="5" style="text-align: center;">Нет деталей</td>
+                        </tr>
+                    </template>
+                    <template x-for="piece in filteredPieces" :key="piece.code">
+                        <tr :class="{ 'registered': piece.owner_id }">
+                            <td><code x-text="piece.code"></code></td>
+                            <td x-text="piece.puzzle_id"></td>
+                            <td x-text="piece.piece_number"></td>
+                            <td x-text="piece.owner_id ? piece.owner_id.substring(0, 8) + '...' : '-'"></td>
+                            <td x-text="piece.registered_at ? formatDate(piece.registered_at) : '-'"></td>
+                        </tr>
+                    </template>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Пагинация -->
+        <div class="pagination" x-show="totalPages > 1">
+            <button @click="prevPage" :disabled="currentPage === 1">Назад</button>
+            <span x-text="'Страница ' + currentPage + ' из ' + totalPages"></span>
+            <button @click="nextPage" :disabled="currentPage === totalPages">Вперед</button>
+        </div>
+
+        <!-- Модальное окно импорта -->
+        <div class="modal-overlay" x-show="showImportModal" @click.self="showImportModal = false">
+            <div class="modal">
+                <h2>Импорт деталей</h2>
+                <p class="modal-description">Введите данные деталей в формате JSON. Каждая деталь должна содержать: code, puzzle_id, piece_number.</p>
+
+                <div class="form-group">
+                    <label for="import-data">JSON данные:</label>
+                    <textarea id="import-data" x-model="importData" rows="10" placeholder='[
+  {"code": "PY1GG7H", "puzzle_id": 1, "piece_number": 1},
+  {"code": "AB2CD3E", "puzzle_id": 1, "piece_number": 2}
+]'></textarea>
+                </div>
+
+                <div class="error-message" x-show="importError" x-text="importError"></div>
+                <div class="success-message" x-show="importSuccess" x-text="importSuccess"></div>
+
+                <div class="modal-actions">
+                    <button @click="importPieces" :disabled="importLoading">
+                        <span x-show="!importLoading">Импортировать</span>
+                        <span x-show="importLoading">Загрузка...</span>
+                    </button>
+                    <button @click="showImportModal = false" class="btn-secondary">Отмена</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function piecesApp() {
+            return {
+                pieces: [],
+                loading: true,
+                error: null,
+                filters: {
+                    puzzleId: '',
+                    status: '',
+                    search: ''
+                },
+                sort: {
+                    field: 'puzzle_id',
+                    direction: 'asc'
+                },
+                currentPage: 1,
+                itemsPerPage: 50,
+                showImportModal: false,
+                importData: '',
+                importLoading: false,
+                importError: null,
+                importSuccess: null,
+
+                init() {
+                    this.checkAuth();
+
+                    // Проверяем URL параметры
+                    const urlParams = new URLSearchParams(window.location.search);
+                    const puzzleId = urlParams.get('puzzle_id');
+                    if (puzzleId) {
+                        this.filters.puzzleId = puzzleId;
+                    }
+
+                    this.fetchPieces();
+                },
+
+                checkAuth() {
+                    const token = localStorage.getItem('admin_token');
+                    const expires = localStorage.getItem('token_expires');
+
+                    if (!token || !expires || new Date(expires) < new Date()) {
+                        this.logout();
+                    }
+                },
+
+                logout() {
+                    localStorage.removeItem('admin_token');
+                    localStorage.removeItem('token_expires');
+                    window.location.href = '/admin/login.html';
+                },
+
+                fetchPieces() {
+                    this.loading = true;
+                    const token = localStorage.getItem('admin_token');
+
+                    fetch('/api/admin/pieces', {
+                        headers: {
+                            'Authorization': `Bearer ${token}`
+                        }
+                    })
+                        .then(response => {
+                            if (!response.ok) {
+                                if (response.status === 401) {
+                                    this.logout();
+                                    throw new Error('Требуется авторизация');
+                                }
+                                throw new Error('Ошибка загрузки деталей');
+                            }
+                            return response.json();
+                        })
+                        .then(data => {
+                            this.pieces = data.pieces;
+                            this.sortPieces();
+                        })
+                        .catch(error => {
+                            this.error = error.message;
+                        })
+                        .finally(() => {
+                            this.loading = false;
+                        });
+                },
+
+                refreshPieces() {
+                    this.fetchPieces();
+                },
+
+                applyFilters() {
+                    this.currentPage = 1;
+                },
+
+                get filteredPieces() {
+                    let result = [...this.pieces];
+
+                    // Фильтр по пазлу
+                    if (this.filters.puzzleId) {
+                        const puzzleId = parseInt(this.filters.puzzleId);
+                        result = result.filter(piece => piece.puzzle_id === puzzleId);
+                    }
+
+                    // Фильтр по статусу
+                    if (this.filters.status) {
+                        if (this.filters.status === 'registered') {
+                            result = result.filter(piece => piece.owner_id);
+                        } else if (this.filters.status === 'available') {
+                            result = result.filter(piece => !piece.owner_id);
+                        }
+                    }
+
+                    // Поиск по коду
+                    if (this.filters.search) {
+                        const search = this.filters.search.toUpperCase();
+                        result = result.filter(piece => piece.code.toUpperCase().includes(search));
+                    }
+
+                    // Пагинация
+                    const start = (this.currentPage - 1) * this.itemsPerPage;
+                    const end = start + this.itemsPerPage;
+                    return result.slice(start, end);
+                },
+
+                get totalFilteredPieces() {
+                    let result = [...this.pieces];
+
+                    if (this.filters.puzzleId) {
+                        const puzzleId = parseInt(this.filters.puzzleId);
+                        result = result.filter(piece => piece.puzzle_id === puzzleId);
+                    }
+
+                    if (this.filters.status) {
+                        if (this.filters.status === 'registered') {
+                            result = result.filter(piece => piece.owner_id);
+                        } else if (this.filters.status === 'available') {
+                            result = result.filter(piece => !piece.owner_id);
+                        }
+                    }
+
+                    if (this.filters.search) {
+                        const search = this.filters.search.toUpperCase();
+                        result = result.filter(piece => piece.code.toUpperCase().includes(search));
+                    }
+
+                    return result.length;
+                },
+
+                get totalPages() {
+                    return Math.ceil(this.totalFilteredPieces / this.itemsPerPage);
+                },
+
+                get totalPieces() {
+                    return this.pieces.length;
+                },
+
+                get registeredPieces() {
+                    return this.pieces.filter(p => p.owner_id).length;
+                },
+
+                get availablePieces() {
+                    return this.pieces.filter(p => !p.owner_id).length;
+                },
+
+                prevPage() {
+                    if (this.currentPage > 1) {
+                        this.currentPage--;
+                    }
+                },
+
+                nextPage() {
+                    if (this.currentPage < this.totalPages) {
+                        this.currentPage++;
+                    }
+                },
+
+                sortBy(field) {
+                    if (this.sort.field === field) {
+                        this.sort.direction = this.sort.direction === 'asc' ? 'desc' : 'asc';
+                    } else {
+                        this.sort.field = field;
+                        this.sort.direction = 'asc';
+                    }
+                    this.sortPieces();
+                },
+
+                sortPieces() {
+                    const field = this.sort.field;
+                    const direction = this.sort.direction;
+
+                    this.pieces.sort((a, b) => {
+                        let valueA = a[field];
+                        let valueB = b[field];
+
+                        if (field === 'registered_at') {
+                            valueA = valueA ? new Date(valueA) : new Date(0);
+                            valueB = valueB ? new Date(valueB) : new Date(0);
+                        } else if (typeof valueA === 'string') {
+                            valueA = valueA ? valueA.toLowerCase() : '';
+                            valueB = valueB ? valueB.toLowerCase() : '';
+                        }
+
+                        if (valueA < valueB) {
+                            return direction === 'asc' ? -1 : 1;
+                        }
+                        if (valueA > valueB) {
+                            return direction === 'asc' ? 1 : -1;
+                        }
+                        return 0;
+                    });
+                },
+
+                getSortClass(field) {
+                    if (this.sort.field !== field) {
+                        return '';
+                    }
+                    return this.sort.direction;
+                },
+
+                formatDate(dateString) {
+                    if (!dateString) return '-';
+                    const date = new Date(dateString);
+                    return date.toLocaleDateString('ru-RU', {
+                        year: 'numeric',
+                        month: 'short',
+                        day: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit'
+                    });
+                },
+
+                importPieces() {
+                    this.importError = null;
+                    this.importSuccess = null;
+
+                    let piecesData;
+                    try {
+                        piecesData = JSON.parse(this.importData);
+                    } catch (e) {
+                        this.importError = 'Неверный формат JSON';
+                        return;
+                    }
+
+                    if (!Array.isArray(piecesData)) {
+                        this.importError = 'Данные должны быть массивом';
+                        return;
+                    }
+
+                    // Валидация данных
+                    for (let i = 0; i < piecesData.length; i++) {
+                        const piece = piecesData[i];
+                        if (!piece.code || !piece.puzzle_id || !piece.piece_number) {
+                            this.importError = `Деталь ${i + 1}: отсутствуют обязательные поля (code, puzzle_id, piece_number)`;
+                            return;
+                        }
+                        if (piece.puzzle_id < 1 || piece.puzzle_id > 30) {
+                            this.importError = `Деталь ${i + 1}: puzzle_id должен быть от 1 до 30`;
+                            return;
+                        }
+                        if (piece.piece_number < 1 || piece.piece_number > 6) {
+                            this.importError = `Деталь ${i + 1}: piece_number должен быть от 1 до 6`;
+                            return;
+                        }
+                    }
+
+                    this.importLoading = true;
+                    const token = localStorage.getItem('admin_token');
+
+                    fetch('/api/admin/pieces/add', {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': `Bearer ${token}`,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({ pieces: piecesData })
+                    })
+                        .then(response => {
+                            if (!response.ok) {
+                                if (response.status === 401) {
+                                    this.logout();
+                                    throw new Error('Требуется авторизация');
+                                }
+                                return response.json().then(data => {
+                                    throw new Error(data.error || 'Ошибка импорта');
+                                });
+                            }
+                            return response.json();
+                        })
+                        .then(data => {
+                            this.importSuccess = `Успешно импортировано ${data.added} деталей`;
+                            this.importData = '';
+                            this.fetchPieces();
+                        })
+                        .catch(error => {
+                            this.importError = error.message;
+                        })
+                        .finally(() => {
+                            this.importLoading = false;
+                        });
+                }
+            };
+        }
+    </script>
+
+    <style>
+        .stats-cards {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+            flex-wrap: wrap;
+        }
+
+        .stat-card {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 1rem 1.5rem;
+            text-align: center;
+            min-width: 120px;
+            flex: 1;
+        }
+
+        .stat-value {
+            font-size: 2rem;
+            font-weight: bold;
+            color: #333;
+        }
+
+        .stat-label {
+            color: #666;
+            font-size: 0.9rem;
+        }
+
+        tr.registered {
+            background: #f0fff4;
+        }
+
+        code {
+            background: #e9ecef;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 0.9rem;
+        }
+
+        .pagination {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 1rem;
+            margin-top: 1rem;
+        }
+
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.5);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+
+        .modal {
+            background: white;
+            padding: 2rem;
+            border-radius: 8px;
+            max-width: 600px;
+            width: 90%;
+            max-height: 80vh;
+            overflow-y: auto;
+        }
+
+        .modal h2 {
+            margin-top: 0;
+        }
+
+        .modal-description {
+            color: #666;
+            margin-bottom: 1rem;
+        }
+
+        .modal textarea {
+            width: 100%;
+            font-family: monospace;
+            font-size: 0.9rem;
+        }
+
+        .modal-actions {
+            display: flex;
+            gap: 1rem;
+            margin-top: 1rem;
+        }
+
+        .btn-secondary {
+            background: #6c757d;
+        }
+
+        .btn-secondary:hover {
+            background: #5a6268;
+        }
+
+        .error-message {
+            color: #dc3545;
+            padding: 0.5rem;
+            background: #f8d7da;
+            border-radius: 4px;
+            margin-top: 0.5rem;
+        }
+
+        .success-message {
+            color: #155724;
+            padding: 0.5rem;
+            background: #d4edda;
+            border-radius: 4px;
+            margin-top: 0.5rem;
+        }
+    </style>
+</body>
+
+</html>

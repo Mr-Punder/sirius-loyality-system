@@ -6,34 +6,32 @@ import (
 )
 
 type Storage interface {
-	// Методы для получения данных
+	// Методы для пользователей
 	GetUser(userId uuid.UUID) (*models.User, error)
-	GetUserPoints(userid uuid.UUID) (int, error)
 	GetUserByTelegramm(telega string) (*models.User, error)
 	GetAllUsers() ([]*models.User, error)
-	GetTransaction(transactionId uuid.UUID) (*models.Transaction, error)
-	GetUserTransactions(userId uuid.UUID) ([]*models.Transaction, error)
-	GetAllTransactions() ([]*models.Transaction, error)
-	GetCodeInfo(code uuid.UUID) (*models.Code, error)
-	GetAllCodes() ([]*models.Code, error)
-	GetCodeUsage(code uuid.UUID) ([]*models.CodeUsage, error)
-	GetAllCodeUsages() ([]*models.CodeUsage, error)
-	GetCodeUsageByUser(code uuid.UUID, userId uuid.UUID) (*models.CodeUsage, error)
-
-	// Методы для добавления данных
 	AddUser(user *models.User) error
-	AddTransaction(transaction *models.Transaction) error
-	AddCode(code *models.Code) error
-	AddCodeUsage(usage *models.CodeUsage) error
-
-	// Методы для обновления данных
 	UpdateUser(user *models.User) error
-	UpdateCode(code *models.Code) error
-	UpdateCodeUsage(usage *models.CodeUsage) error
-
-	// Методы для удаления данных
 	DeleteUser(userId uuid.UUID) error
-	DeleteCode(code uuid.UUID) error
+
+	// Методы для пазлов
+	GetPuzzle(puzzleId int) (*models.Puzzle, error)
+	GetAllPuzzles() ([]*models.Puzzle, error)
+	UpdatePuzzle(puzzle *models.Puzzle) error
+
+	// Методы для деталей пазлов
+	GetPuzzlePiece(code string) (*models.PuzzlePiece, error)
+	GetPuzzlePiecesByPuzzle(puzzleId int) ([]*models.PuzzlePiece, error)
+	GetPuzzlePiecesByOwner(ownerId uuid.UUID) ([]*models.PuzzlePiece, error)
+	GetAllPuzzlePieces() ([]*models.PuzzlePiece, error)
+	AddPuzzlePiece(piece *models.PuzzlePiece) error
+	AddPuzzlePieces(pieces []*models.PuzzlePiece) error                                    // Массовое добавление
+	RegisterPuzzlePiece(code string, ownerId uuid.UUID) (*models.PuzzlePiece, bool, error) // Возвращает деталь, флаг "все детали розданы", ошибку
+	CompletePuzzle(puzzleId int) ([]*models.User, error)                                   // Засчитать пазл, вернуть владельцев деталей для уведомления
+
+	// Методы для статистики
+	GetUserPieceCount(userId uuid.UUID) (int, error)
+	GetUserCompletedPuzzlePieceCount(userId uuid.UUID) (int, error)
 
 	// Методы для работы с администраторами
 	GetAdmin(adminId int64) (*models.Admin, error)
@@ -41,4 +39,11 @@ type Storage interface {
 	AddAdmin(admin *models.Admin) error
 	UpdateAdmin(admin *models.Admin) error
 	DeleteAdmin(adminId int64) error
+
+	// Методы для уведомлений (очередь рассылки)
+	AddNotification(notification *models.Notification) error
+	GetPendingNotifications() ([]*models.Notification, error)
+	UpdateNotification(notification *models.Notification) error
+	GetNotification(id uuid.UUID) (*models.Notification, error)
+	GetAllNotifications() ([]*models.Notification, error)
 }

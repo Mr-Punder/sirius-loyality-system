@@ -3,12 +3,13 @@ package telegrambot
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
+	"regexp"
+	"sync"
+	"time"
 
 	"github.com/MrPunder/sirius-loyality-system/internal/logger"
 	"github.com/MrPunder/sirius-loyality-system/internal/models"
 	"github.com/MrPunder/sirius-loyality-system/internal/storage"
-	"github.com/google/uuid"
 	tele "gopkg.in/telebot.v3"
 )
 
@@ -20,6 +21,12 @@ const (
 	RegistrationStepGroup      = 4
 )
 
+// Константы для анти-спам системы
+const (
+	MaxFailedAttempts = 3
+	BlockDuration     = 5 * time.Minute
+)
+
 // RegistrationState хранит состояние регистрации пользователя
 type RegistrationState struct {
 	Step       int
@@ -29,13 +36,23 @@ type RegistrationState struct {
 	Group      string
 }
 
+// FailedAttempts хранит информацию о неудачных попытках ввода кода
+type FailedAttempts struct {
+	Count     int
+	LastTry   time.Time
+	BlockedAt *time.Time
+}
+
 // UserBot представляет бота для пользователей
 type UserBot struct {
 	bot                *tele.Bot
 	logger             logger.Logger
 	config             Config
 	apiClient          *APIClient
-	registrationStates map[int64]*RegistrationState // Карта для хранения состояний регистрации
+	registrationStates map[int64]*RegistrationState
+	failedAttempts     map[int64]*FailedAttempts
+	attemptsMutex      sync.RWMutex
+	stopChan           chan struct{} // Канал для остановки горутины уведомлений
 }
 
 // NewUserBot создает нового бота для пользователей
@@ -59,6 +76,8 @@ func NewUserBot(config Config, storage storage.Storage, logger logger.Logger) (*
 		config:             config,
 		apiClient:          apiClient,
 		registrationStates: make(map[int64]*RegistrationState),
+		failedAttempts:     make(map[int64]*FailedAttempts),
+		stopChan:           make(chan struct{}),
 	}, nil
 }
 
@@ -72,15 +91,15 @@ func (ub *UserBot) Start() error {
 	// Обработчик команды /register
 	ub.bot.Handle("/register", ub.handleRegister)
 
-	// Обработчик команды /points
-	ub.bot.Handle("/points", ub.handlePoints)
+	// Обработчик команды /pieces
+	ub.bot.Handle("/pieces", ub.handlePieces)
 
-	// Обработчик для QR-кодов и текстовых сообщений
+	// Обработчик для текстовых сообщений
 	ub.bot.Handle(tele.OnText, ub.handleText)
 
 	// Обработчики кнопок
-	ub.bot.Handle("💰 Мои баллы", ub.handlePointsButton)
-	ub.bot.Handle("📷 Сканировать QR-код", ub.handleScanQRButton)
+	ub.bot.Handle("🧩 Мои детали", ub.handlePiecesButton)
+	ub.bot.Handle("📷 Ввести код детали", ub.handleEnterCodeButton)
 	ub.bot.Handle("❓ Помощь", ub.handleHelpButton)
 	ub.bot.Handle("📝 Регистрация", ub.handleRegisterButton)
 	ub.bot.Handle("⏭️ Пропустить", ub.handleSkipButton)
@@ -89,65 +108,55 @@ func (ub *UserBot) Start() error {
 	// Запуск бота
 	go ub.bot.Start()
 
+	// Запуск горутины для обработки уведомлений
+	go ub.notificationPoller()
+
 	return nil
 }
 
-// handlePointsButton обрабатывает нажатие на кнопку "Мои баллы"
-func (ub *UserBot) handlePointsButton(c tele.Context) error {
-	// Просто вызываем обработчик команды /points
-	return ub.handlePoints(c)
+// handlePiecesButton обрабатывает нажатие на кнопку "Мои детали"
+func (ub *UserBot) handlePiecesButton(c tele.Context) error {
+	return ub.handlePieces(c)
 }
 
-// handleScanQRButton обрабатывает нажатие на кнопку "Сканировать QR-код"
-func (ub *UserBot) handleScanQRButton(c tele.Context) error {
-	ub.logger.Infof("Пользователь %d нажал на кнопку 'Сканировать QR-код'", c.Sender().ID)
+// handleEnterCodeButton обрабатывает нажатие на кнопку "Ввести код детали"
+func (ub *UserBot) handleEnterCodeButton(c tele.Context) error {
+	ub.logger.Infof("Пользователь %d нажал на кнопку 'Ввести код детали'", c.Sender().ID)
+
+	// Проверяем блокировку за спам
+	if ub.isUserBlocked(c.Sender().ID) {
+		remaining := ub.getBlockTimeRemaining(c.Sender().ID)
+		return c.Send(fmt.Sprintf("Слишком много неудачных попыток. Попробуй через %d минут.", int(remaining.Minutes())+1))
+	}
 
 	// Проверяем, зарегистрирован ли пользователь
-	telegramID := fmt.Sprintf("%d", c.Sender().ID)
-
-	// Получаем список пользователей через API
-	usersData, err := ub.apiClient.Get("/users", nil)
+	user, err := ub.getUser(c.Sender().ID)
 	if err != nil {
-		ub.logger.Errorf("Ошибка получения пользователей через API: %v", err)
-		return c.Send("Произошла ошибка при проверке регистрации. Пожалуйста, попробуйте позже.")
-	}
-
-	// Декодируем ответ
-	var usersResponse struct {
-		Total int            `json:"total"`
-		Users []*models.User `json:"users"`
-	}
-	if err := json.Unmarshal(usersData, &usersResponse); err != nil {
-		ub.logger.Errorf("Ошибка декодирования ответа API: %v", err)
-		return c.Send("Произошла ошибка при проверке регистрации. Пожалуйста, попробуйте позже.")
-	}
-
-	var user *models.User
-	for _, u := range usersResponse.Users {
-		if u.Telegramm == telegramID && !u.Deleted {
-			user = u
-			break
-		}
+		ub.logger.Errorf("Ошибка получения пользователя: %v", err)
+		return c.Send("Произошла ошибка при проверке регистрации. Пожалуйста, попробуй позже.")
 	}
 
 	if user == nil {
-		// Пользователь не зарегистрирован
 		return c.Send("Ты не зарегистрирован в системе. Используй кнопку 'Регистрация' для регистрации.")
 	}
 
 	// Отправляем сообщение с инструкцией
-	return c.Send("Отправь мне QR-код в виде текста (UUID).")
+	return c.Send("Отправь мне код детали пазла (7 символов, например: PY1GG7H).")
 }
 
 // handleHelpButton обрабатывает нажатие на кнопку "Помощь"
 func (ub *UserBot) handleHelpButton(c tele.Context) error {
 	ub.logger.Infof("Пользователь %d нажал на кнопку 'Помощь'", c.Sender().ID)
 
-	// Отправляем справку
-	message := "Я бот системы лояльности. Вот что я умею:\n\n" +
+	message := "Я бот системы пазлов. Вот что я умею:\n\n" +
 		"- Регистрация в системе\n" +
-		"- Просмотр баллов\n" +
-		"- Сканирование QR-кодов для получения баллов\n\n" +
+		"- Просмотр собранных деталей\n" +
+		"- Регистрация деталей пазлов по коду\n\n" +
+		"Как это работает:\n" +
+		"1. Получи деталь пазла и введи её код\n" +
+		"2. Найди других участников с деталями твоего пазла\n" +
+		"3. Соберите пазл вместе и покажите организаторам\n" +
+		"4. Организаторы засчитают пазл, и вы все участвуете в розыгрыше!\n\n" +
 		"Используй кнопки внизу экрана для навигации."
 
 	return c.Send(message)
@@ -155,7 +164,6 @@ func (ub *UserBot) handleHelpButton(c tele.Context) error {
 
 // handleRegisterButton обрабатывает нажатие на кнопку "Регистрация"
 func (ub *UserBot) handleRegisterButton(c tele.Context) error {
-	// Просто вызываем обработчик команды /register
 	return ub.handleRegister(c)
 }
 
@@ -165,14 +173,12 @@ func (ub *UserBot) createRegistrationKeyboard(withSkip bool) *tele.ReplyMarkup {
 	btnCancel := keyboard.Text("❌ Отменить")
 
 	if withSkip {
-		// Клавиатура с кнопками "Пропустить" и "Отменить"
 		btnSkip := keyboard.Text("⏭️ Пропустить")
 		keyboard.Reply(
 			keyboard.Row(btnSkip),
 			keyboard.Row(btnCancel),
 		)
 	} else {
-		// Клавиатура только с кнопкой "Отменить"
 		keyboard.Reply(keyboard.Row(btnCancel))
 	}
 
@@ -181,18 +187,14 @@ func (ub *UserBot) createRegistrationKeyboard(withSkip bool) *tele.ReplyMarkup {
 
 // handleSkipButton обрабатывает нажатие на кнопку "Пропустить"
 func (ub *UserBot) handleSkipButton(c tele.Context) error {
-	// Получаем состояние регистрации
 	state, exists := ub.registrationStates[c.Sender().ID]
 	if !exists {
 		return c.Send("Ты не находишься в процессе регистрации. Используй /register для начала регистрации.")
 	}
 
-	// Обрабатываем пропуск в зависимости от текущего шага
 	if state.Step == RegistrationStepMiddleName {
-		// Пропускаем отчество
 		state.MiddleName = ""
 		state.Step = RegistrationStepGroup
-		// Отправляем запрос группы с кнопкой "Отменить"
 		keyboard := ub.createRegistrationKeyboard(false)
 		return c.Send("Введи свою группу (Н1-Н6):", keyboard)
 	}
@@ -202,16 +204,12 @@ func (ub *UserBot) handleSkipButton(c tele.Context) error {
 
 // handleCancelButton обрабатывает нажатие на кнопку "Отменить"
 func (ub *UserBot) handleCancelButton(c tele.Context) error {
-	// Проверяем, находится ли пользователь в процессе регистрации
 	_, exists := ub.registrationStates[c.Sender().ID]
 	if !exists {
 		return c.Send("Ты не находишься в процессе регистрации.")
 	}
 
-	// Удаляем состояние регистрации
 	delete(ub.registrationStates, c.Sender().ID)
-
-	// Отправляем сообщение об отмене регистрации с основной клавиатурой
 	keyboard := ub.createMainKeyboard(false)
 	return c.Send("Регистрация отменена.", keyboard)
 }
@@ -219,6 +217,7 @@ func (ub *UserBot) handleCancelButton(c tele.Context) error {
 // Stop останавливает бота
 func (ub *UserBot) Stop() error {
 	ub.logger.Info("Остановка пользовательского бота")
+	close(ub.stopChan) // Останавливаем горутину уведомлений
 	ub.bot.Stop()
 	return nil
 }
@@ -227,16 +226,14 @@ func (ub *UserBot) Stop() error {
 func (ub *UserBot) createMainKeyboard(isRegistered bool) *tele.ReplyMarkup {
 	keyboard := &tele.ReplyMarkup{ResizeKeyboard: true}
 
-	// Создаем кнопки
-	btnPoints := keyboard.Text("💰 Мои баллы")
-	btnScanQR := keyboard.Text("📷 Сканировать QR-код")
+	btnPieces := keyboard.Text("🧩 Мои детали")
+	btnEnterCode := keyboard.Text("📷 Ввести код детали")
 	btnHelp := keyboard.Text("❓ Помощь")
 	btnRegister := keyboard.Text("📝 Регистрация")
 
-	// Добавляем кнопки на клавиатуру в зависимости от статуса регистрации
 	if isRegistered {
 		keyboard.Reply(
-			keyboard.Row(btnPoints, btnScanQR),
+			keyboard.Row(btnPieces, btnEnterCode),
 			keyboard.Row(btnHelp),
 		)
 	} else {
@@ -253,49 +250,23 @@ func (ub *UserBot) createMainKeyboard(isRegistered bool) *tele.ReplyMarkup {
 func (ub *UserBot) handleStart(c tele.Context) error {
 	ub.logger.Infof("Пользователь %d запустил бота", c.Sender().ID)
 
-	// Проверяем, зарегистрирован ли пользователь
-	telegramID := fmt.Sprintf("%d", c.Sender().ID)
-
-	// Получаем список пользователей через API
-	usersData, err := ub.apiClient.Get("/users", nil)
+	user, err := ub.getUser(c.Sender().ID)
 	if err != nil {
-		ub.logger.Errorf("Ошибка получения пользователей через API: %v", err)
-		return c.Send("Произошла ошибка при проверке регистрации. Пожалуйста, попробуйте позже.")
+		ub.logger.Errorf("Ошибка получения пользователя: %v", err)
+		return c.Send("Произошла ошибка при проверке регистрации. Пожалуйста, попробуй позже.")
 	}
 
-	// Декодируем ответ
-	var usersResponse struct {
-		Total int            `json:"total"`
-		Users []*models.User `json:"users"`
-	}
-	if err := json.Unmarshal(usersData, &usersResponse); err != nil {
-		ub.logger.Errorf("Ошибка декодирования ответа API: %v", err)
-		return c.Send("Произошла ошибка при проверке регистрации. Пожалуйста, попробуйте позже.")
-	}
-
-	var user *models.User
-	for _, u := range usersResponse.Users {
-		if u.Telegramm == telegramID && !u.Deleted {
-			user = u
-			break
-		}
-	}
-
-	// Создаем клавиатуру
 	var keyboard *tele.ReplyMarkup
 	var message string
 
 	if user != nil {
-		// Пользователь уже зарегистрирован
 		keyboard = ub.createMainKeyboard(true)
 		message = fmt.Sprintf("Привет, %s! Ты уже зарегистрирован в системе. Используй кнопки для навигации.", user.FirstName)
 	} else {
-		// Пользователь не зарегистрирован
 		keyboard = ub.createMainKeyboard(false)
-		message = "Привет! Я бот системы лояльности. Для начала работы тебе нужно зарегистрироваться."
+		message = "Привет! Я бот системы пазлов. Для начала работы тебе нужно зарегистрироваться."
 	}
 
-	// Отправляем сообщение с клавиатурой
 	return c.Send(message, keyboard)
 }
 
@@ -303,95 +274,86 @@ func (ub *UserBot) handleStart(c tele.Context) error {
 func (ub *UserBot) handleRegister(c tele.Context) error {
 	ub.logger.Infof("Пользователь %d запросил регистрацию", c.Sender().ID)
 
-	// Проверяем, зарегистрирован ли пользователь
-	telegramID := fmt.Sprintf("%d", c.Sender().ID)
-
-	// Получаем список пользователей через API
-	usersData, err := ub.apiClient.Get("/users", nil)
+	user, err := ub.getUser(c.Sender().ID)
 	if err != nil {
-		ub.logger.Errorf("Ошибка получения пользователей через API: %v", err)
-		return c.Send("Произошла ошибка при проверке регистрации. Пожалуйста, попробуйте позже.")
+		ub.logger.Errorf("Ошибка получения пользователя: %v", err)
+		return c.Send("Произошла ошибка при проверке регистрации. Пожалуйста, попробуй позже.")
 	}
 
-	// Декодируем ответ
-	var usersResponse struct {
-		Total int            `json:"total"`
-		Users []*models.User `json:"users"`
-	}
-	if err := json.Unmarshal(usersData, &usersResponse); err != nil {
-		ub.logger.Errorf("Ошибка декодирования ответа API: %v", err)
-		return c.Send("Произошла ошибка при проверке регистрации. Пожалуйста, попробуйте позже.")
+	if user != nil {
+		keyboard := ub.createMainKeyboard(true)
+		return c.Send(fmt.Sprintf("Ты уже зарегистрирован в системе как %s %s.", user.FirstName, user.LastName), keyboard)
 	}
 
-	for _, u := range usersResponse.Users {
-		if u.Telegramm == telegramID && !u.Deleted {
-			// Пользователь уже зарегистрирован
-			keyboard := ub.createMainKeyboard(true)
-			return c.Send(fmt.Sprintf("Ты уже зарегистрирован в системе как %s %s.", u.FirstName, u.LastName), keyboard)
-		}
-	}
-
-	// Начинаем процесс регистрации
 	ub.registrationStates[c.Sender().ID] = &RegistrationState{
 		Step: RegistrationStepLastName,
 	}
 
-	// Запрашиваем фамилию с кнопкой "Отменить"
 	keyboard := ub.createRegistrationKeyboard(false)
 	return c.Send("Для регистрации введи свою фамилию:", keyboard)
 }
 
-// handlePoints обрабатывает команду /points
-func (ub *UserBot) handlePoints(c tele.Context) error {
-	ub.logger.Infof("Пользователь %d запросил баллы", c.Sender().ID)
+// handlePieces обрабатывает команду /pieces
+func (ub *UserBot) handlePieces(c tele.Context) error {
+	ub.logger.Infof("Пользователь %d запросил свои детали", c.Sender().ID)
 
-	// Получаем пользователя
-	telegramID := fmt.Sprintf("%d", c.Sender().ID)
-
-	// Получаем список пользователей через API
-	usersData, err := ub.apiClient.Get("/users", nil)
+	user, err := ub.getUser(c.Sender().ID)
 	if err != nil {
-		ub.logger.Errorf("Ошибка получения пользователей через API: %v", err)
-		return c.Send("Произошла ошибка при получении баллов. Пожалуйста, попробуйте позже.")
-	}
-
-	// Декодируем ответ
-	var usersResponse struct {
-		Total int            `json:"total"`
-		Users []*models.User `json:"users"`
-	}
-	if err := json.Unmarshal(usersData, &usersResponse); err != nil {
-		ub.logger.Errorf("Ошибка декодирования ответа API: %v", err)
-		return c.Send("Произошла ошибка при получении баллов. Пожалуйста, попробуйте позже.")
-	}
-
-	var user *models.User
-	for _, u := range usersResponse.Users {
-		if u.Telegramm == telegramID && !u.Deleted {
-			user = u
-			break
-		}
+		ub.logger.Errorf("Ошибка получения пользователя: %v", err)
+		return c.Send("Произошла ошибка при получении деталей. Пожалуйста, попробуй позже.")
 	}
 
 	if user == nil {
-		// Пользователь не зарегистрирован
 		keyboard := ub.createMainKeyboard(false)
 		return c.Send("Ты не зарегистрирован в системе. Используй кнопку 'Регистрация' для регистрации.", keyboard)
 	}
 
-	// Отправляем информацию о баллах
+	// Получаем детали пользователя через API
+	piecesData, err := ub.apiClient.Get(fmt.Sprintf("/users/%s/pieces", user.Id), nil)
+	if err != nil {
+		ub.logger.Errorf("Ошибка получения деталей через API: %v", err)
+		return c.Send("Произошла ошибка при получении деталей. Пожалуйста, попробуй позже.")
+	}
+
+	var piecesResponse struct {
+		Total  int                   `json:"total"`
+		Pieces []*models.PuzzlePiece `json:"pieces"`
+	}
+	if err := json.Unmarshal(piecesData, &piecesResponse); err != nil {
+		ub.logger.Errorf("Ошибка декодирования ответа API: %v", err)
+		return c.Send("Произошла ошибка при получении деталей. Пожалуйста, попробуй позже.")
+	}
+
 	keyboard := ub.createMainKeyboard(true)
-	return c.Send(fmt.Sprintf("У тебя %d баллов.", user.Points), keyboard)
+
+	if piecesResponse.Total == 0 {
+		return c.Send("У тебя пока нет зарегистрированных деталей.", keyboard)
+	}
+
+	// Группируем детали по пазлам
+	puzzlePieces := make(map[int][]*models.PuzzlePiece)
+	for _, piece := range piecesResponse.Pieces {
+		puzzlePieces[piece.PuzzleId] = append(puzzlePieces[piece.PuzzleId], piece)
+	}
+
+	message := fmt.Sprintf("У тебя %d деталей:\n\n", piecesResponse.Total)
+	for puzzleId, pieces := range puzzlePieces {
+		message += fmt.Sprintf("Пазл #%d: %d деталей\n", puzzleId, len(pieces))
+		for _, piece := range pieces {
+			message += fmt.Sprintf("  - Деталь %d (код: %s)\n", piece.PieceNumber, piece.Code)
+		}
+	}
+
+	return c.Send(message, keyboard)
 }
 
 // handleText обрабатывает текстовые сообщения
 func (ub *UserBot) handleText(c tele.Context) error {
 	text := c.Text()
-	telegramID := fmt.Sprintf("%d", c.Sender().ID)
 
-	// Проверяем, является ли сообщение QR-кодом (UUID)
-	if isUUID(text) {
-		return ub.handleQRCode(c, text)
+	// Проверяем, является ли сообщение кодом детали
+	if isPieceCode(text) {
+		return ub.handlePieceCode(c, text)
 	}
 
 	// Проверяем, находится ли пользователь в процессе регистрации
@@ -400,31 +362,11 @@ func (ub *UserBot) handleText(c tele.Context) error {
 		return ub.handleRegistrationStep(c, text, state)
 	}
 
-	// Если сообщение не является QR-кодом или пользователь не в процессе регистрации, отправляем справку
-	// Определяем, зарегистрирован ли пользователь
-	// Получаем список пользователей через API
-	usersData, err := ub.apiClient.Get("/users", nil)
+	// Если сообщение не является кодом детали или пользователь не в процессе регистрации
+	user, err := ub.getUser(c.Sender().ID)
 	if err != nil {
-		ub.logger.Errorf("Ошибка получения пользователей через API: %v", err)
-		return c.Send("Произошла ошибка. Пожалуйста, попробуйте позже.")
-	}
-
-	// Декодируем ответ
-	var usersResponse struct {
-		Total int            `json:"total"`
-		Users []*models.User `json:"users"`
-	}
-	if err := json.Unmarshal(usersData, &usersResponse); err != nil {
-		ub.logger.Errorf("Ошибка декодирования ответа API: %v", err)
-		return c.Send("Произошла ошибка. Пожалуйста, попробуйте позже.")
-	}
-
-	var user *models.User
-	for _, u := range usersResponse.Users {
-		if u.Telegramm == telegramID && !u.Deleted {
-			user = u
-			break
-		}
+		ub.logger.Errorf("Ошибка получения пользователя: %v", err)
+		return c.Send("Произошла ошибка. Пожалуйста, попробуй позже.")
 	}
 
 	var keyboard *tele.ReplyMarkup
@@ -439,7 +381,6 @@ func (ub *UserBot) handleText(c tele.Context) error {
 
 // handleRegistrationStep обрабатывает шаги регистрации
 func (ub *UserBot) handleRegistrationStep(c tele.Context, text string, state *RegistrationState) error {
-	// Проверяем, является ли текст командой "Пропустить" или "Отменить"
 	if text == "⏭️ Пропустить" {
 		return ub.handleSkipButton(c)
 	} else if text == "❌ Отменить" {
@@ -448,67 +389,43 @@ func (ub *UserBot) handleRegistrationStep(c tele.Context, text string, state *Re
 
 	switch state.Step {
 	case RegistrationStepLastName:
-		// Сохраняем фамилию
 		state.LastName = text
 		state.Step = RegistrationStepFirstName
-		// Отправляем запрос имени с кнопкой "Отменить"
 		keyboard := ub.createRegistrationKeyboard(false)
 		return c.Send("Теперь введи своё имя:", keyboard)
 
 	case RegistrationStepFirstName:
-		// Сохраняем имя
 		state.FirstName = text
 		state.Step = RegistrationStepMiddleName
-		// Отправляем запрос отчества с кнопками "Пропустить" и "Отменить"
 		keyboard := ub.createRegistrationKeyboard(true)
 		return c.Send("Введи своё отчество (или нажми кнопку 'Пропустить'):", keyboard)
 
 	case RegistrationStepMiddleName:
-		// Сохраняем отчество
 		state.MiddleName = text
 		state.Step = RegistrationStepGroup
-		// Отправляем запрос группы с кнопкой "Отменить"
 		keyboard := ub.createRegistrationKeyboard(false)
 		return c.Send("Введи свою группу (Н1-Н6):", keyboard)
 
 	case RegistrationStepGroup:
-		// Нормализуем группу
 		normalizedGroup, valid := NormalizeGroupName(text)
 		if !valid {
-			// Отправляем сообщение об ошибке с кнопкой "Отменить"
 			keyboard := ub.createRegistrationKeyboard(false)
 			return c.Send("Неверный формат группы. Группа должна быть от Н1 до Н6 (или H1 до H6).", keyboard)
 		}
 
-		// Сохраняем группу
 		state.Group = normalizedGroup
-
-		// Проверяем, зарегистрирован ли пользователь
 		telegramID := fmt.Sprintf("%d", c.Sender().ID)
 
-		// Получаем список пользователей через API
-		usersData, err := ub.apiClient.Get("/users", nil)
+		// Проверяем, не зарегистрирован ли уже пользователь
+		user, err := ub.getUser(c.Sender().ID)
 		if err != nil {
-			ub.logger.Errorf("Ошибка получения пользователей через API: %v", err)
-			return c.Send("Произошла ошибка при регистрации. Пожалуйста, попробуйте позже.")
+			ub.logger.Errorf("Ошибка получения пользователя: %v", err)
+			return c.Send("Произошла ошибка при регистрации. Пожалуйста, попробуй позже.")
 		}
 
-		// Декодируем ответ
-		var usersResponse struct {
-			Total int            `json:"total"`
-			Users []*models.User `json:"users"`
-		}
-		if err := json.Unmarshal(usersData, &usersResponse); err != nil {
-			ub.logger.Errorf("Ошибка декодирования ответа API: %v", err)
-			return c.Send("Произошла ошибка при регистрации. Пожалуйста, попробуйте позже.")
-		}
-
-		for _, u := range usersResponse.Users {
-			if u.Telegramm == telegramID && !u.Deleted {
-				// Пользователь уже зарегистрирован
-				delete(ub.registrationStates, c.Sender().ID) // Удаляем состояние регистрации
-				return c.Send(fmt.Sprintf("Ты уже зарегистрирован в системе как %s %s.", u.FirstName, u.LastName))
-			}
+		if user != nil {
+			delete(ub.registrationStates, c.Sender().ID)
+			return c.Send(fmt.Sprintf("Ты уже зарегистрирован в системе как %s %s.", user.FirstName, user.LastName))
 		}
 
 		// Добавляем пользователя через API
@@ -521,16 +438,12 @@ func (ub *UserBot) handleRegistrationStep(c tele.Context, text string, state *Re
 		})
 		if err != nil {
 			ub.logger.Errorf("Ошибка добавления пользователя через API: %v", err)
-			return c.Send("Произошла ошибка при регистрации. Пожалуйста, попробуйте позже.")
+			return c.Send("Произошла ошибка при регистрации. Пожалуйста, попробуй позже.")
 		}
 
-		// Удаляем состояние регистрации
 		delete(ub.registrationStates, c.Sender().ID)
-
-		// Отправляем сообщение об успешной регистрации с клавиатурой
 		keyboard := ub.createMainKeyboard(true)
 
-		// Формируем сообщение об успешной регистрации
 		successMessage := fmt.Sprintf("Ты успешно зарегистрирован как %s %s", state.LastName, state.FirstName)
 		if state.MiddleName != "" {
 			successMessage += fmt.Sprintf(" %s", state.MiddleName)
@@ -543,112 +456,344 @@ func (ub *UserBot) handleRegistrationStep(c tele.Context, text string, state *Re
 	return nil
 }
 
-// handleQRCode обрабатывает QR-код
-func (ub *UserBot) handleQRCode(c tele.Context, code string) error {
-	ub.logger.Infof("Пользователь %d отправил QR-код: %s", c.Sender().ID, code)
+// handlePieceCode обрабатывает код детали пазла
+func (ub *UserBot) handlePieceCode(c tele.Context, code string) error {
+	ub.logger.Infof("Пользователь %d отправил код детали: %s", c.Sender().ID, code)
+
+	// Проверяем блокировку за спам
+	if ub.isUserBlocked(c.Sender().ID) {
+		remaining := ub.getBlockTimeRemaining(c.Sender().ID)
+		return c.Send(fmt.Sprintf("Слишком много неудачных попыток. Попробуй через %d минут.", int(remaining.Minutes())+1))
+	}
 
 	// Получаем пользователя
-	telegramID := fmt.Sprintf("%d", c.Sender().ID)
-
-	// Получаем список пользователей через API
-	usersData, err := ub.apiClient.Get("/users", nil)
+	user, err := ub.getUser(c.Sender().ID)
 	if err != nil {
-		ub.logger.Errorf("Ошибка получения пользователей через API: %v", err)
-		return c.Send("Произошла ошибка при применении QR-кода. Пожалуйста, попробуйте позже.")
-	}
-
-	// Декодируем ответ
-	var usersResponse struct {
-		Total int            `json:"total"`
-		Users []*models.User `json:"users"`
-	}
-	if err := json.Unmarshal(usersData, &usersResponse); err != nil {
-		ub.logger.Errorf("Ошибка декодирования ответа API: %v", err)
-		return c.Send("Произошла ошибка при применении QR-кода. Пожалуйста, попробуйте позже.")
-	}
-
-	var user *models.User
-	for _, u := range usersResponse.Users {
-		if u.Telegramm == telegramID && !u.Deleted {
-			user = u
-			break
-		}
+		ub.logger.Errorf("Ошибка получения пользователя: %v", err)
+		return c.Send("Произошла ошибка при регистрации детали. Пожалуйста, попробуй позже.")
 	}
 
 	if user == nil {
-		// Пользователь не зарегистрирован
 		return c.Send("Ты не зарегистрирован в системе. Используй /register для регистрации.")
 	}
 
-	// Проверяем, что код является валидным UUID
-	if _, err := uuid.Parse(code); err != nil {
-		ub.logger.Errorf("Ошибка парсинга UUID: %v", err)
-		return c.Send("Неверный формат QR-кода.")
-	}
+	// Нормализуем код (приводим к верхнему регистру)
+	normalizedCode := normalizeCode(code)
 
-	// Получаем информацию о коде через API
-	codeData, err := ub.apiClient.Get("/codes/"+code, nil)
+	// Регистрируем деталь через API
+	registerData, err := ub.apiClient.Post("/pieces/"+normalizedCode+"/register", map[string]interface{}{
+		"user_id": user.Id,
+	})
+
 	if err != nil {
-		ub.logger.Errorf("Ошибка получения информации о коде через API: %v", err)
-		return c.Send("QR-код не найден.")
+		ub.logger.Errorf("Ошибка регистрации детали через API: %v", err)
+
+		// Увеличиваем счетчик неудачных попыток
+		ub.recordFailedAttempt(c.Sender().ID)
+
+		attemptsLeft := MaxFailedAttempts - ub.getFailedAttemptCount(c.Sender().ID)
+		if attemptsLeft <= 0 {
+			return c.Send(fmt.Sprintf("Деталь не найдена. Слишком много неудачных попыток. Попробуй через %d минут.", int(BlockDuration.Minutes())))
+		}
+
+		return c.Send(fmt.Sprintf("Деталь не найдена. Осталось попыток: %d", attemptsLeft))
 	}
 
 	// Декодируем ответ
-	var codeInfo models.Code
-	if err := json.Unmarshal(codeData, &codeInfo); err != nil {
+	var registerResponse struct {
+		Success         bool               `json:"success"`
+		Piece           *models.PuzzlePiece `json:"piece"`
+		PuzzleCompleted bool               `json:"puzzle_completed"`
+		Error           string             `json:"error"`
+		ErrorCode       int                `json:"error_code"`
+	}
+	if err := json.Unmarshal(registerData, &registerResponse); err != nil {
 		ub.logger.Errorf("Ошибка декодирования ответа API: %v", err)
-		return c.Send("Произошла ошибка при получении информации о коде. Пожалуйста, попробуйте позже.")
+		return c.Send("Произошла ошибка при регистрации детали. Пожалуйста, попробуй позже.")
 	}
 
-	// Проверяем, активен ли код
-	if !codeInfo.IsActive {
-		return c.Send("Этот QR-код неактивен.")
-	}
+	if !registerResponse.Success {
+		// Обрабатываем ошибку
+		ub.recordFailedAttempt(c.Sender().ID)
 
-	// Проверяем, принадлежит ли пользователь к нужной группе
-	if codeInfo.Group != "" && user.Group != codeInfo.Group {
-		return c.Send(fmt.Sprintf("Этот QR-код предназначен только для группы %s.", codeInfo.Group))
-	}
-
-	// Применяем код через API
-	applyData, err := ub.apiClient.Post("/codes/"+code+"/apply", map[string]interface{}{
-		"user_id": user.Id,
-	})
-	if err != nil {
-		ub.logger.Errorf("Ошибка применения кода через API: %v", err)
-
-		// Возвращаем более информативные ошибки в зависимости от типа ошибки
-		errorMsg := "Произошла ошибка при применении QR-кода. Пожалуйста, попробуйте позже."
-		if strings.Contains(err.Error(), "code usage limit exceeded") {
-			errorMsg = "Превышено общее количество использований QR-кода."
-		} else if strings.Contains(err.Error(), "user code usage limit exceeded") {
-			errorMsg = "Ты уже использовал этот QR-код максимальное количество раз."
-		} else if strings.Contains(err.Error(), "code is not active") {
-			errorMsg = "Этот QR-код неактивен."
+		errorMsg := "Не удалось зарегистрировать деталь."
+		switch registerResponse.ErrorCode {
+		case models.PieceErrorNotFound:
+			attemptsLeft := MaxFailedAttempts - ub.getFailedAttemptCount(c.Sender().ID)
+			if attemptsLeft <= 0 {
+				return c.Send(fmt.Sprintf("Деталь не найдена. Слишком много неудачных попыток. Попробуй через %d минут.", int(BlockDuration.Minutes())))
+			}
+			errorMsg = fmt.Sprintf("Деталь не найдена. Осталось попыток: %d", attemptsLeft)
+		case models.PieceErrorAlreadyTaken:
+			// Это не считается неудачной попыткой для анти-спама
+			ub.clearFailedAttempts(c.Sender().ID)
+			errorMsg = "Эта деталь уже зарегистрирована."
 		}
 
 		return c.Send(errorMsg)
 	}
 
-	// Декодируем ответ
-	var applyResponse struct {
-		Success     bool `json:"success"`
-		PointsAdded int  `json:"points_added"`
-		TotalPoints int  `json:"total_points"`
-	}
-	if err := json.Unmarshal(applyData, &applyResponse); err != nil {
-		ub.logger.Errorf("Ошибка декодирования ответа API: %v", err)
-		return c.Send("Произошла ошибка при применении QR-кода. Пожалуйста, попробуйте позже.")
+	// Успешная регистрация - сбрасываем счетчик неудачных попыток
+	ub.clearFailedAttempts(c.Sender().ID)
+
+	keyboard := ub.createMainKeyboard(true)
+
+	message := fmt.Sprintf("Деталь успешно зарегистрирована!\n"+
+		"Пазл #%d, деталь %d", registerResponse.Piece.PuzzleId, registerResponse.Piece.PieceNumber)
+
+	if registerResponse.PuzzleCompleted {
+		message += fmt.Sprintf("\n\n🧩 Все 6 деталей пазла #%d розданы!\n"+
+			"Найди остальных участников с деталями этого пазла, соберите его вместе и покажите организаторам для засчитывания.",
+			registerResponse.Piece.PuzzleId)
 	}
 
-	// Отправляем сообщение об успешном применении QR-кода с клавиатурой
-	keyboard := ub.createMainKeyboard(true)
-	return c.Send(fmt.Sprintf("QR-код успешно применен! Добавлено %d баллов. Теперь у тебя %d баллов.",
-		applyResponse.PointsAdded, applyResponse.TotalPoints), keyboard)
+	return c.Send(message, keyboard)
 }
 
-// isUUID проверяет, является ли строка UUID
-func isUUID(s string) bool {
-	_, err := uuid.Parse(s)
-	return err == nil
+// getUser получает пользователя по Telegram ID
+func (ub *UserBot) getUser(telegramID int64) (*models.User, error) {
+	telegramIDStr := fmt.Sprintf("%d", telegramID)
+
+	usersData, err := ub.apiClient.Get("/users", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var usersResponse struct {
+		Total int            `json:"total"`
+		Users []*models.User `json:"users"`
+	}
+	if err := json.Unmarshal(usersData, &usersResponse); err != nil {
+		return nil, err
+	}
+
+	for _, u := range usersResponse.Users {
+		if u.Telegramm == telegramIDStr && !u.Deleted {
+			return u, nil
+		}
+	}
+
+	return nil, nil
+}
+
+// isPieceCode проверяет, является ли строка кодом детали (7 символов A-Z, 0-9)
+func isPieceCode(s string) bool {
+	if len(s) != 7 {
+		return false
+	}
+	matched, _ := regexp.MatchString(`^[A-Za-z0-9]{7}$`, s)
+	return matched
+}
+
+// normalizeCode приводит код к верхнему регистру и обрезает пробелы
+func normalizeCode(code string) string {
+	result := ""
+	for _, c := range code {
+		if c >= 'a' && c <= 'z' {
+			result += string(c - 32)
+		} else if c != ' ' && c != '\t' && c != '\n' && c != '\r' {
+			result += string(c)
+		}
+	}
+	return result
+}
+
+// isUserBlocked проверяет, заблокирован ли пользователь за спам
+func (ub *UserBot) isUserBlocked(userID int64) bool {
+	ub.attemptsMutex.RLock()
+	defer ub.attemptsMutex.RUnlock()
+
+	attempts, exists := ub.failedAttempts[userID]
+	if !exists {
+		return false
+	}
+
+	if attempts.BlockedAt == nil {
+		return false
+	}
+
+	// Проверяем, истек ли срок блокировки
+	if time.Since(*attempts.BlockedAt) > BlockDuration {
+		return false
+	}
+
+	return true
+}
+
+// getBlockTimeRemaining возвращает оставшееся время блокировки
+func (ub *UserBot) getBlockTimeRemaining(userID int64) time.Duration {
+	ub.attemptsMutex.RLock()
+	defer ub.attemptsMutex.RUnlock()
+
+	attempts, exists := ub.failedAttempts[userID]
+	if !exists || attempts.BlockedAt == nil {
+		return 0
+	}
+
+	remaining := BlockDuration - time.Since(*attempts.BlockedAt)
+	if remaining < 0 {
+		return 0
+	}
+	return remaining
+}
+
+// recordFailedAttempt записывает неудачную попытку
+func (ub *UserBot) recordFailedAttempt(userID int64) {
+	ub.attemptsMutex.Lock()
+	defer ub.attemptsMutex.Unlock()
+
+	attempts, exists := ub.failedAttempts[userID]
+	if !exists {
+		attempts = &FailedAttempts{}
+		ub.failedAttempts[userID] = attempts
+	}
+
+	// Если блокировка истекла, сбрасываем счетчик
+	if attempts.BlockedAt != nil && time.Since(*attempts.BlockedAt) > BlockDuration {
+		attempts.Count = 0
+		attempts.BlockedAt = nil
+	}
+
+	attempts.Count++
+	attempts.LastTry = time.Now()
+
+	// Если превышен лимит, блокируем
+	if attempts.Count >= MaxFailedAttempts {
+		now := time.Now()
+		attempts.BlockedAt = &now
+	}
+}
+
+// getFailedAttemptCount возвращает количество неудачных попыток
+func (ub *UserBot) getFailedAttemptCount(userID int64) int {
+	ub.attemptsMutex.RLock()
+	defer ub.attemptsMutex.RUnlock()
+
+	attempts, exists := ub.failedAttempts[userID]
+	if !exists {
+		return 0
+	}
+
+	// Если блокировка истекла, считаем что попыток 0
+	if attempts.BlockedAt != nil && time.Since(*attempts.BlockedAt) > BlockDuration {
+		return 0
+	}
+
+	return attempts.Count
+}
+
+// clearFailedAttempts сбрасывает счетчик неудачных попыток
+func (ub *UserBot) clearFailedAttempts(userID int64) {
+	ub.attemptsMutex.Lock()
+	defer ub.attemptsMutex.Unlock()
+
+	delete(ub.failedAttempts, userID)
+}
+
+// ==================== РАССЫЛКА УВЕДОМЛЕНИЙ ====================
+
+// notificationPoller периодически проверяет очередь уведомлений и отправляет их
+func (ub *UserBot) notificationPoller() {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ub.stopChan:
+			return
+		case <-ticker.C:
+			ub.processNotifications()
+		}
+	}
+}
+
+// processNotifications обрабатывает ожидающие уведомления
+func (ub *UserBot) processNotifications() {
+	// Получаем ожидающие уведомления с пользователями
+	data, err := ub.apiClient.Get("/notifications/pending", nil)
+	if err != nil {
+		ub.logger.Errorf("Ошибка получения уведомлений: %v", err)
+		return
+	}
+
+	var response struct {
+		Total         int `json:"total"`
+		Notifications []struct {
+			Id          string   `json:"id"`
+			Message     string   `json:"message"`
+			Attachments []string `json:"attachments,omitempty"`
+			Users       []struct {
+				Telegramm string `json:"telegramm"`
+			} `json:"users"`
+		} `json:"notifications"`
+	}
+
+	if err := json.Unmarshal(data, &response); err != nil {
+		ub.logger.Errorf("Ошибка декодирования уведомлений: %v", err)
+		return
+	}
+
+	if response.Total == 0 {
+		return
+	}
+
+	ub.logger.Infof("Найдено %d уведомлений для отправки", response.Total)
+
+	for _, notification := range response.Notifications {
+		sentCount := 0
+		errorCount := 0
+
+		for _, user := range notification.Users {
+			if user.Telegramm == "" {
+				errorCount++
+				continue
+			}
+
+			telegramID, err := parseTelegramID(user.Telegramm)
+			if err != nil {
+				ub.logger.Errorf("Ошибка парсинга Telegram ID: %v", err)
+				errorCount++
+				continue
+			}
+
+			recipient := &tele.User{ID: telegramID}
+
+			// TODO: поддержка вложений (attachments)
+			_, err = ub.bot.Send(recipient, notification.Message)
+			if err != nil {
+				ub.logger.Errorf("Ошибка отправки уведомления пользователю %d: %v", telegramID, err)
+				errorCount++
+			} else {
+				sentCount++
+			}
+
+			time.Sleep(50 * time.Millisecond) // Небольшая задержка между отправками
+		}
+
+		// Обновляем статус уведомления
+		status := "sent"
+		if errorCount > 0 && sentCount == 0 {
+			status = "failed"
+		}
+
+		updateData := map[string]interface{}{
+			"status":      status,
+			"sent_count":  sentCount,
+			"error_count": errorCount,
+		}
+
+		_, err := ub.apiClient.Patch("/notifications/"+notification.Id, updateData)
+		if err != nil {
+			ub.logger.Errorf("Ошибка обновления статуса уведомления: %v", err)
+		} else {
+			ub.logger.Infof("Уведомление %s обработано: отправлено %d, ошибок %d", notification.Id, sentCount, errorCount)
+		}
+	}
+}
+
+// parseTelegramID парсит Telegram ID из строки
+func parseTelegramID(s string) (int64, error) {
+	var id int64
+	_, err := fmt.Sscanf(s, "%d", &id)
+	return id, err
 }

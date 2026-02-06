@@ -49,8 +49,8 @@ type UserResponse struct {
 	FirstName        string    `json:"first_name"`
 	LastName         string    `json:"last_name"`
 	MiddleName       string    `json:"middle_name"`
-	Points           int       `json:"points"`
 	Group            string    `json:"group"`
+	PieceCount       int       `json:"piece_count"`
 	RegistrationTime time.Time `json:"registration_time"`
 }
 
@@ -60,30 +60,34 @@ type UsersResponse struct {
 	Users []UserResponse `json:"users"`
 }
 
-// CodeRequest представляет запрос на создание QR-кода
-type CodeRequest struct {
-	Amount  int    `json:"amount"`
-	PerUser int    `json:"per_user"`
-	Total   int    `json:"total"`
-	Group   string `json:"group"`
+// PieceResponse представляет ответ с информацией о детали пазла
+type PieceResponse struct {
+	Code         string     `json:"code"`
+	PuzzleId     int        `json:"puzzle_id"`
+	PieceNumber  int        `json:"piece_number"`
+	OwnerId      *uuid.UUID `json:"owner_id,omitempty"`
+	RegisteredAt *time.Time `json:"registered_at,omitempty"`
 }
 
-// CodeResponse представляет ответ с информацией о QR-коде
-type CodeResponse struct {
-	Code         uuid.UUID `json:"code"`
-	Amount       int       `json:"amount"`
-	PerUser      int       `json:"per_user"`
-	Total        int       `json:"total"`
-	AppliedCount int       `json:"applied_count"`
-	IsActive     bool      `json:"is_active"`
-	Group        string    `json:"group"`
-	ErrorCode    int       `json:"error_code"`
+// PiecesResponse представляет ответ со списком деталей пазлов
+type PiecesResponse struct {
+	Total  int             `json:"total"`
+	Pieces []PieceResponse `json:"pieces"`
 }
 
-// CodesResponse представляет ответ со списком QR-кодов
-type CodesResponse struct {
-	Total int            `json:"total"`
-	Codes []CodeResponse `json:"codes"`
+// PuzzleResponse представляет ответ с информацией о пазле
+type PuzzleResponse struct {
+	Id          int        `json:"id"`
+	IsCompleted bool       `json:"is_completed"`
+	CompletedAt *time.Time `json:"completed_at,omitempty"`
+	TotalPieces int        `json:"total_pieces"`
+	OwnedPieces int        `json:"owned_pieces"`
+}
+
+// PuzzlesResponse представляет ответ со списком пазлов
+type PuzzlesResponse struct {
+	Total   int              `json:"total"`
+	Puzzles []PuzzleResponse `json:"puzzles"`
 }
 
 // NewAdminHandler создает новый обработчик админки
@@ -164,11 +168,22 @@ func (ah *AdminHandler) RegisterRoutes(r chi.Router) {
 		r.Group(func(r chi.Router) {
 			r.Use(ah.authMw.Middleware)
 
+			// Пользователи
 			r.Get("/users", ah.handleUsers)
 			r.Post("/users/update", ah.handleUpdateUser)
 			r.Post("/users/delete", ah.handleDeleteUser)
-			r.Get("/codes", ah.handleCodes)
-			r.Post("/codes/generate", ah.handleGenerateCode)
+
+			// Пазлы
+			r.Get("/puzzles", ah.handlePuzzles)
+
+			// Детали пазлов
+			r.Get("/pieces", ah.handlePieces)
+			r.Post("/pieces/add", ah.handleAddPieces)
+
+			// Статистика для розыгрыша
+			r.Get("/lottery", ah.handleLotteryStats)
+
+			// Администраторы
 			r.Get("/admins", ah.handleGetAdmins)
 			r.Post("/admins/add", ah.handleAddAdmin)
 			r.Post("/admins/remove", ah.handleRemoveAdmin)
@@ -197,8 +212,10 @@ func (ah *AdminHandler) handleAdminRoot(w http.ResponseWriter, r *http.Request) 
 	// Получаем запрошенную страницу из параметра запроса
 	page := r.URL.Query().Get("page")
 	switch page {
-	case "codes":
-		http.ServeFile(w, r, ah.staticDir+"/codes.html")
+	case "puzzles":
+		http.ServeFile(w, r, ah.staticDir+"/puzzles.html")
+	case "pieces":
+		http.ServeFile(w, r, ah.staticDir+"/pieces.html")
 	case "admins":
 		http.ServeFile(w, r, ah.staticDir+"/admins.html")
 	default:
@@ -382,14 +399,17 @@ func (ah *AdminHandler) handleUsers(w http.ResponseWriter, r *http.Request) {
 	// Преобразуем пользователей в ответ
 	var userResponses []UserResponse
 	for _, user := range filteredUsers {
+		// Получаем количество деталей пользователя
+		pieceCount, _ := ah.store.GetUserPieceCount(user.Id)
+
 		userResponses = append(userResponses, UserResponse{
 			ID:               user.Id,
 			Telegramm:        user.Telegramm,
 			FirstName:        user.FirstName,
 			LastName:         user.LastName,
 			MiddleName:       user.MiddleName,
-			Points:           user.Points,
 			Group:            user.Group,
+			PieceCount:       pieceCount,
 			RegistrationTime: user.RegistrationTime,
 		})
 	}
@@ -456,33 +476,15 @@ func (ah *AdminHandler) handleUpdateUser(w http.ResponseWriter, r *http.Request)
 		user.Group = group
 	}
 
-	if points, ok := updateData["points"].(float64); ok {
-		// Если баллы изменились, создаем транзакцию
-		diff := int(points) - user.Points
-		if diff != 0 {
-			transaction := &models.Transaction{
-				Id:     uuid.New(),
-				UserId: user.Id,
-				Diff:   diff,
-				Time:   models.GetCurrentTime(),
-			}
-
-			if err := ah.store.AddTransaction(transaction); err != nil {
-				ah.logger.Errorf("Ошибка создания транзакции: %v", err)
-				http.Error(w, "Внутренняя ошибка сервера", http.StatusInternalServerError)
-				return
-			}
-		}
-
-		user.Points = int(points)
-	}
-
 	// Сохраняем обновленного пользователя
 	if err := ah.store.UpdateUser(user); err != nil {
 		ah.logger.Errorf("Ошибка обновления пользователя: %v", err)
 		http.Error(w, "Внутренняя ошибка сервера", http.StatusInternalServerError)
 		return
 	}
+
+	// Получаем количество деталей пользователя
+	pieceCount, _ := ah.store.GetUserPieceCount(user.Id)
 
 	// Отправляем ответ
 	userResp := UserResponse{
@@ -491,8 +493,8 @@ func (ah *AdminHandler) handleUpdateUser(w http.ResponseWriter, r *http.Request)
 		FirstName:        user.FirstName,
 		LastName:         user.LastName,
 		MiddleName:       user.MiddleName,
-		Points:           user.Points,
 		Group:            user.Group,
+		PieceCount:       pieceCount,
 		RegistrationTime: user.RegistrationTime,
 	}
 
@@ -500,109 +502,235 @@ func (ah *AdminHandler) handleUpdateUser(w http.ResponseWriter, r *http.Request)
 	json.NewEncoder(w).Encode(userResp)
 }
 
-// handleCodes обрабатывает запрос на получение списка QR-кодов
-func (ah *AdminHandler) handleCodes(w http.ResponseWriter, r *http.Request) {
+// handlePuzzles обрабатывает запрос на получение списка пазлов
+func (ah *AdminHandler) handlePuzzles(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Метод не поддерживается", http.StatusMethodNotAllowed)
 		return
 	}
 
-	// Получаем параметры фильтрации
-	isActiveStr := r.URL.Query().Get("is_active")
-
-	// Получаем все коды
-	codes, err := ah.store.GetAllCodes()
+	// Получаем все пазлы
+	puzzles, err := ah.store.GetAllPuzzles()
 	if err != nil {
-		ah.logger.Errorf("Ошибка получения кодов: %v", err)
+		ah.logger.Errorf("Ошибка получения пазлов: %v", err)
 		http.Error(w, "Внутренняя ошибка сервера", http.StatusInternalServerError)
 		return
 	}
 
-	// Фильтруем коды
-	var filteredCodes []*models.Code
-	for _, code := range codes {
-		// Фильтр по активности
-		if isActiveStr != "" {
-			isActive, err := strconv.ParseBool(isActiveStr)
-			if err == nil && code.IsActive != isActive {
-				continue
+	// Преобразуем пазлы в ответ
+	var puzzleResponses []PuzzleResponse
+	for _, puzzle := range puzzles {
+		// Получаем детали пазла для подсчета прогресса
+		pieces, _ := ah.store.GetPuzzlePiecesByPuzzle(puzzle.Id)
+		ownedCount := 0
+		for _, p := range pieces {
+			if p.OwnerId != nil {
+				ownedCount++
 			}
 		}
 
-		filteredCodes = append(filteredCodes, code)
-	}
-
-	// Преобразуем коды в ответ
-	var codeResponses []CodeResponse
-	for _, code := range filteredCodes {
-		codeResponses = append(codeResponses, CodeResponse{
-			Code:         code.Code,
-			Amount:       code.Amount,
-			PerUser:      code.PerUser,
-			Total:        code.Total,
-			AppliedCount: code.AppliedCount,
-			IsActive:     code.IsActive,
-			Group:        code.Group,
-			ErrorCode:    code.ErrorCode,
+		puzzleResponses = append(puzzleResponses, PuzzleResponse{
+			Id:          puzzle.Id,
+			IsCompleted: puzzle.IsCompleted,
+			CompletedAt: puzzle.CompletedAt,
+			TotalPieces: len(pieces),
+			OwnedPieces: ownedCount,
 		})
 	}
 
 	// Отправляем ответ
-	resp := CodesResponse{
-		Total: len(codeResponses),
-		Codes: codeResponses,
+	resp := PuzzlesResponse{
+		Total:   len(puzzleResponses),
+		Puzzles: puzzleResponses,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
 }
 
-// handleGenerateCode обрабатывает запрос на генерацию QR-кода
-func (ah *AdminHandler) handleGenerateCode(w http.ResponseWriter, r *http.Request) {
+// handlePieces обрабатывает запрос на получение списка деталей пазлов
+func (ah *AdminHandler) handlePieces(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Метод не поддерживается", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Получаем параметры фильтрации
+	puzzleIdStr := r.URL.Query().Get("puzzle_id")
+	hasOwnerStr := r.URL.Query().Get("has_owner")
+
+	// Получаем все детали
+	pieces, err := ah.store.GetAllPuzzlePieces()
+	if err != nil {
+		ah.logger.Errorf("Ошибка получения деталей: %v", err)
+		http.Error(w, "Внутренняя ошибка сервера", http.StatusInternalServerError)
+		return
+	}
+
+	// Фильтруем детали
+	var filteredPieces []*models.PuzzlePiece
+	for _, piece := range pieces {
+		// Фильтр по пазлу
+		if puzzleIdStr != "" {
+			puzzleId, err := strconv.Atoi(puzzleIdStr)
+			if err == nil && piece.PuzzleId != puzzleId {
+				continue
+			}
+		}
+
+		// Фильтр по наличию владельца
+		if hasOwnerStr != "" {
+			hasOwner := hasOwnerStr == "true" || hasOwnerStr == "1"
+			if hasOwner && piece.OwnerId == nil {
+				continue
+			}
+			if !hasOwner && piece.OwnerId != nil {
+				continue
+			}
+		}
+
+		filteredPieces = append(filteredPieces, piece)
+	}
+
+	// Преобразуем детали в ответ
+	var pieceResponses []PieceResponse
+	for _, piece := range filteredPieces {
+		pieceResponses = append(pieceResponses, PieceResponse{
+			Code:         piece.Code,
+			PuzzleId:     piece.PuzzleId,
+			PieceNumber:  piece.PieceNumber,
+			OwnerId:      piece.OwnerId,
+			RegisteredAt: piece.RegisteredAt,
+		})
+	}
+
+	// Отправляем ответ
+	resp := PiecesResponse{
+		Total:  len(pieceResponses),
+		Pieces: pieceResponses,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
+}
+
+// handleAddPieces обрабатывает запрос на добавление деталей пазлов
+func (ah *AdminHandler) handleAddPieces(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Метод не поддерживается", http.StatusMethodNotAllowed)
 		return
 	}
 
-	var req CodeRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	// Декодируем запрос
+	var request struct {
+		Pieces []struct {
+			Code        string `json:"code"`
+			PuzzleId    int    `json:"puzzle_id"`
+			PieceNumber int    `json:"piece_number"`
+		} `json:"pieces"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		ah.logger.Errorf("Ошибка декодирования запроса: %v", err)
 		http.Error(w, "Неверный формат запроса", http.StatusBadRequest)
 		return
 	}
 
-	// Создаем новый код
-	code := &models.Code{
-		Code:         uuid.New(),
-		Amount:       req.Amount,
-		PerUser:      req.PerUser,
-		Total:        req.Total,
-		AppliedCount: 0,
-		IsActive:     true,
-		Group:        req.Group,
-		ErrorCode:    models.ErrorCodeNone,
+	// Создаем объекты деталей
+	pieces := make([]*models.PuzzlePiece, len(request.Pieces))
+	for i, p := range request.Pieces {
+		pieces[i] = &models.PuzzlePiece{
+			Code:         p.Code,
+			PuzzleId:     p.PuzzleId,
+			PieceNumber:  p.PieceNumber,
+			OwnerId:      nil,
+			RegisteredAt: nil,
+		}
 	}
 
-	// Сохраняем код
-	if err := ah.store.AddCode(code); err != nil {
-		ah.logger.Errorf("Ошибка создания кода: %v", err)
-		http.Error(w, "Внутренняя ошибка сервера", http.StatusInternalServerError)
+	// Добавляем детали в хранилище
+	if err := ah.store.AddPuzzlePieces(pieces); err != nil {
+		ah.logger.Errorf("Ошибка добавления деталей: %v", err)
+		http.Error(w, "Ошибка добавления деталей", http.StatusInternalServerError)
 		return
 	}
 
 	// Отправляем ответ
-	codeResp := CodeResponse{
-		Code:         code.Code,
-		Amount:       code.Amount,
-		PerUser:      code.PerUser,
-		Total:        code.Total,
-		AppliedCount: code.AppliedCount,
-		IsActive:     code.IsActive,
-		Group:        code.Group,
-		ErrorCode:    code.ErrorCode,
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"added":   len(pieces),
+	})
+}
+
+// handleLotteryStats обрабатывает запрос на получение статистики для розыгрыша
+func (ah *AdminHandler) handleLotteryStats(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Метод не поддерживается", http.StatusMethodNotAllowed)
+		return
 	}
 
+	// Получаем всех пользователей
+	users, err := ah.store.GetAllUsers()
+	if err != nil {
+		ah.logger.Errorf("Ошибка получения пользователей: %v", err)
+		http.Error(w, "Внутренняя ошибка сервера", http.StatusInternalServerError)
+		return
+	}
+
+	// Получаем все пазлы
+	puzzles, err := ah.store.GetAllPuzzles()
+	if err != nil {
+		ah.logger.Errorf("Ошибка получения пазлов: %v", err)
+		http.Error(w, "Внутренняя ошибка сервера", http.StatusInternalServerError)
+		return
+	}
+
+	// Собираем статистику для каждого пользователя
+	type UserStats struct {
+		UserId          uuid.UUID `json:"user_id"`
+		FirstName       string    `json:"first_name"`
+		LastName        string    `json:"last_name"`
+		Group           string    `json:"group"`
+		TotalPieces     int       `json:"total_pieces"`
+		CompletedPieces int       `json:"completed_pieces"`
+	}
+
+	var userStats []UserStats
+	for _, user := range users {
+		if user.Deleted {
+			continue
+		}
+
+		totalPieces, _ := ah.store.GetUserPieceCount(user.Id)
+		completedPieces, _ := ah.store.GetUserCompletedPuzzlePieceCount(user.Id)
+
+		userStats = append(userStats, UserStats{
+			UserId:          user.Id,
+			FirstName:       user.FirstName,
+			LastName:        user.LastName,
+			Group:           user.Group,
+			TotalPieces:     totalPieces,
+			CompletedPieces: completedPieces,
+		})
+	}
+
+	// Считаем собранные пазлы
+	completedPuzzles := 0
+	for _, puzzle := range puzzles {
+		if puzzle.IsCompleted {
+			completedPuzzles++
+		}
+	}
+
+	// Отправляем ответ
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(codeResp)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"total_users":       len(userStats),
+		"total_puzzles":     len(puzzles),
+		"completed_puzzles": completedPuzzles,
+		"users":             userStats,
+	})
 }
 
 // handleGetAdmins обрабатывает запрос на получение списка администраторов
@@ -751,8 +879,10 @@ func (ah *AdminHandler) ServeStaticFiles(w http.ResponseWriter, r *http.Request)
 		// Получаем запрошенную страницу из параметра запроса
 		page := r.URL.Query().Get("page")
 		switch page {
-		case "codes":
-			http.ServeFile(w, r, ah.staticDir+"/codes.html")
+		case "puzzles":
+			http.ServeFile(w, r, ah.staticDir+"/puzzles.html")
+		case "pieces":
+			http.ServeFile(w, r, ah.staticDir+"/pieces.html")
 		case "admins":
 			http.ServeFile(w, r, ah.staticDir+"/admins.html")
 		default:

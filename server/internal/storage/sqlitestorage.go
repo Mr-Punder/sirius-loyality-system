@@ -12,9 +12,6 @@ import (
 	"time"
 
 	"github.com/MrPunder/sirius-loyality-system/internal/models"
-	"github.com/golang-migrate/migrate/v4"
-	"github.com/golang-migrate/migrate/v4/database/sqlite3"
-	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/google/uuid"
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -25,24 +22,19 @@ type SQLiteStorage struct {
 }
 
 // NewSQLiteStorage создает новое хранилище SQLite
-func NewSQLiteStorage(dbPath string, migrationsPath string) (*SQLiteStorage, error) {
+func NewSQLiteStorage(dbPath string) (*SQLiteStorage, error) {
 	// Создаем директорию для базы данных, если она не существует
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
 		return nil, fmt.Errorf("failed to create directory for database: %w", err)
 	}
 
 	// Подключение к базе данных с улучшенными параметрами для конкурентного доступа
-	// _journal=WAL - использование режима Write-Ahead Logging для улучшения конкурентного доступа
-	// _timeout=5000 - увеличение времени ожидания до 5 секунд
-	// _busy_timeout=5000 - время ожидания при блокировке базы данных
-	// _foreign_keys=on - включение поддержки внешних ключей
 	db, err := sql.Open("sqlite3", dbPath+"?_journal=WAL&_timeout=5000&_busy_timeout=5000&_foreign_keys=on")
 	if err != nil {
 		return nil, fmt.Errorf("unable to connect to database: %w", err)
 	}
 
 	// Настройка пула соединений
-	// Ограничиваем количество одновременных соединений
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
 	db.SetConnMaxLifetime(time.Hour)
@@ -57,38 +49,7 @@ func NewSQLiteStorage(dbPath string, migrationsPath string) (*SQLiteStorage, err
 		db: db,
 	}
 
-	// Применяем миграции, если указан путь
-	if migrationsPath != "" {
-		if err := storage.runMigrations(db, migrationsPath); err != nil {
-			return nil, fmt.Errorf("failed to run migrations: %w", err)
-		}
-	}
-
 	return storage, nil
-}
-
-// runMigrations запускает миграции базы данных
-func (s *SQLiteStorage) runMigrations(db *sql.DB, migrationsPath string) error {
-	// Создаем драйвер для миграций
-	driver, err := sqlite3.WithInstance(db, &sqlite3.Config{})
-	if err != nil {
-		return fmt.Errorf("failed to create migration driver: %w", err)
-	}
-
-	// Создаем экземпляр миграции
-	m, err := migrate.NewWithDatabaseInstance(
-		fmt.Sprintf("file:%s", migrationsPath),
-		"sqlite3", driver)
-	if err != nil {
-		return fmt.Errorf("failed to create migration instance: %w", err)
-	}
-
-	// Запускаем миграции
-	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
-		return fmt.Errorf("failed to apply migrations: %w", err)
-	}
-
-	return nil
 }
 
 // Close закрывает соединение с базой данных
@@ -98,10 +59,12 @@ func (s *SQLiteStorage) Close() {
 	}
 }
 
+// ==================== МЕТОДЫ ДЛЯ ПОЛЬЗОВАТЕЛЕЙ ====================
+
 // GetUser возвращает пользователя по ID
 func (s *SQLiteStorage) GetUser(userId uuid.UUID) (*models.User, error) {
 	query := `
-		SELECT id, telegramm, first_name, last_name, middle_name, points, "group", registration_time, deleted
+		SELECT id, telegramm, first_name, last_name, middle_name, "group", registration_time, deleted
 		FROM users
 		WHERE id = ? AND deleted = 0
 	`
@@ -114,7 +77,6 @@ func (s *SQLiteStorage) GetUser(userId uuid.UUID) (*models.User, error) {
 		&user.FirstName,
 		&user.LastName,
 		&user.MiddleName,
-		&user.Points,
 		&user.Group,
 		&registrationTimeStr,
 		&user.Deleted,
@@ -127,7 +89,6 @@ func (s *SQLiteStorage) GetUser(userId uuid.UUID) (*models.User, error) {
 		return nil, fmt.Errorf("failed to get user: %w", err)
 	}
 
-	// Преобразуем строку времени в time.Time
 	registrationTime, err := time.Parse(time.RFC3339, registrationTimeStr)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse registration time: %w", err)
@@ -137,30 +98,10 @@ func (s *SQLiteStorage) GetUser(userId uuid.UUID) (*models.User, error) {
 	return &user, nil
 }
 
-// GetUserPoints возвращает количество баллов пользователя
-func (s *SQLiteStorage) GetUserPoints(userId uuid.UUID) (int, error) {
-	query := `
-		SELECT points
-		FROM users
-		WHERE id = ? AND deleted = 0
-	`
-
-	var points int
-	err := s.db.QueryRow(query, userId).Scan(&points)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return 0, errors.New("user not found")
-		}
-		return 0, fmt.Errorf("failed to get user points: %w", err)
-	}
-
-	return points, nil
-}
-
 // GetUserByTelegramm возвращает пользователя по Telegram ID
 func (s *SQLiteStorage) GetUserByTelegramm(telegramm string) (*models.User, error) {
 	query := `
-		SELECT id, telegramm, first_name, last_name, middle_name, points, "group", registration_time, deleted
+		SELECT id, telegramm, first_name, last_name, middle_name, "group", registration_time, deleted
 		FROM users
 		WHERE telegramm = ? AND deleted = 0
 	`
@@ -173,7 +114,6 @@ func (s *SQLiteStorage) GetUserByTelegramm(telegramm string) (*models.User, erro
 		&user.FirstName,
 		&user.LastName,
 		&user.MiddleName,
-		&user.Points,
 		&user.Group,
 		&registrationTimeStr,
 		&user.Deleted,
@@ -186,7 +126,6 @@ func (s *SQLiteStorage) GetUserByTelegramm(telegramm string) (*models.User, erro
 		return nil, fmt.Errorf("failed to get user by telegramm: %w", err)
 	}
 
-	// Преобразуем строку времени в time.Time
 	registrationTime, err := time.Parse(time.RFC3339, registrationTimeStr)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse registration time: %w", err)
@@ -199,7 +138,7 @@ func (s *SQLiteStorage) GetUserByTelegramm(telegramm string) (*models.User, erro
 // GetAllUsers возвращает список всех пользователей
 func (s *SQLiteStorage) GetAllUsers() ([]*models.User, error) {
 	query := `
-		SELECT id, telegramm, first_name, last_name, middle_name, points, "group", registration_time, deleted
+		SELECT id, telegramm, first_name, last_name, middle_name, "group", registration_time, deleted
 		FROM users
 		WHERE deleted = 0
 		ORDER BY registration_time DESC
@@ -221,7 +160,6 @@ func (s *SQLiteStorage) GetAllUsers() ([]*models.User, error) {
 			&user.FirstName,
 			&user.LastName,
 			&user.MiddleName,
-			&user.Points,
 			&user.Group,
 			&registrationTimeStr,
 			&user.Deleted,
@@ -230,7 +168,6 @@ func (s *SQLiteStorage) GetAllUsers() ([]*models.User, error) {
 			return nil, fmt.Errorf("failed to scan user: %w", err)
 		}
 
-		// Преобразуем строку времени в time.Time
 		registrationTime, err := time.Parse(time.RFC3339, registrationTimeStr)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse registration time: %w", err)
@@ -247,344 +184,9 @@ func (s *SQLiteStorage) GetAllUsers() ([]*models.User, error) {
 	return users, nil
 }
 
-// GetTransaction возвращает транзакцию по ID
-func (s *SQLiteStorage) GetTransaction(transactionId uuid.UUID) (*models.Transaction, error) {
-	query := `
-		SELECT id, user_id, code, diff, time
-		FROM transactions
-		WHERE id = ?
-	`
-
-	var transaction models.Transaction
-	var codeStr sql.NullString
-	var timeStr string
-	err := s.db.QueryRow(query, transactionId).Scan(
-		&transaction.Id,
-		&transaction.UserId,
-		&codeStr,
-		&transaction.Diff,
-		&timeStr,
-	)
-
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, errors.New("transaction not found")
-		}
-		return nil, fmt.Errorf("failed to get transaction: %w", err)
-	}
-
-	// Если code не NULL, присваиваем значение
-	if codeStr.Valid {
-		code, err := uuid.Parse(codeStr.String)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse code UUID: %w", err)
-		}
-		transaction.Code = code
-	}
-
-	// Преобразуем строку времени в time.Time
-	transactionTime, err := time.Parse(time.RFC3339, timeStr)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse transaction time: %w", err)
-	}
-	transaction.Time = transactionTime
-
-	return &transaction, nil
-}
-
-// GetUserTransactions возвращает список транзакций пользователя
-func (s *SQLiteStorage) GetUserTransactions(userId uuid.UUID) ([]*models.Transaction, error) {
-	query := `
-		SELECT id, user_id, code, diff, time
-		FROM transactions
-		WHERE user_id = ?
-		ORDER BY time DESC
-	`
-
-	rows, err := s.db.Query(query, userId)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query user transactions: %w", err)
-	}
-	defer rows.Close()
-
-	var transactions []*models.Transaction
-	for rows.Next() {
-		var transaction models.Transaction
-		var codeStr sql.NullString
-		var timeStr string
-		err := rows.Scan(
-			&transaction.Id,
-			&transaction.UserId,
-			&codeStr,
-			&transaction.Diff,
-			&timeStr,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to scan transaction: %w", err)
-		}
-
-		// Если code не NULL, присваиваем значение
-		if codeStr.Valid {
-			code, err := uuid.Parse(codeStr.String)
-			if err != nil {
-				return nil, fmt.Errorf("failed to parse code UUID: %w", err)
-			}
-			transaction.Code = code
-		}
-
-		// Преобразуем строку времени в time.Time
-		transactionTime, err := time.Parse(time.RFC3339, timeStr)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse transaction time: %w", err)
-		}
-		transaction.Time = transactionTime
-
-		transactions = append(transactions, &transaction)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating transactions: %w", err)
-	}
-
-	return transactions, nil
-}
-
-// GetAllTransactions возвращает список всех транзакций
-func (s *SQLiteStorage) GetAllTransactions() ([]*models.Transaction, error) {
-	query := `
-		SELECT id, user_id, code, diff, time
-		FROM transactions
-		ORDER BY time DESC
-	`
-
-	rows, err := s.db.Query(query)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query transactions: %w", err)
-	}
-	defer rows.Close()
-
-	var transactions []*models.Transaction
-	for rows.Next() {
-		var transaction models.Transaction
-		var codeStr sql.NullString
-		var timeStr string
-		err := rows.Scan(
-			&transaction.Id,
-			&transaction.UserId,
-			&codeStr,
-			&transaction.Diff,
-			&timeStr,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to scan transaction: %w", err)
-		}
-
-		// Если code не NULL, присваиваем значение
-		if codeStr.Valid {
-			code, err := uuid.Parse(codeStr.String)
-			if err != nil {
-				return nil, fmt.Errorf("failed to parse code UUID: %w", err)
-			}
-			transaction.Code = code
-		}
-
-		// Преобразуем строку времени в time.Time
-		transactionTime, err := time.Parse(time.RFC3339, timeStr)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse transaction time: %w", err)
-		}
-		transaction.Time = transactionTime
-
-		transactions = append(transactions, &transaction)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating transactions: %w", err)
-	}
-
-	return transactions, nil
-}
-
-// GetCodeInfo возвращает информацию о коде
-func (s *SQLiteStorage) GetCodeInfo(code uuid.UUID) (*models.Code, error) {
-	query := `
-		SELECT code, amount, per_user, total, applied_count, is_active, "group", error_code
-		FROM codes
-		WHERE code = ?
-	`
-
-	var codeInfo models.Code
-	var isActive int
-	err := s.db.QueryRow(query, code).Scan(
-		&codeInfo.Code,
-		&codeInfo.Amount,
-		&codeInfo.PerUser,
-		&codeInfo.Total,
-		&codeInfo.AppliedCount,
-		&isActive,
-		&codeInfo.Group,
-		&codeInfo.ErrorCode,
-	)
-
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, errors.New("code not found")
-		}
-		return nil, fmt.Errorf("failed to get code info: %w", err)
-	}
-
-	codeInfo.IsActive = isActive == 1
-
-	return &codeInfo, nil
-}
-
-// GetAllCodes возвращает список всех кодов
-func (s *SQLiteStorage) GetAllCodes() ([]*models.Code, error) {
-	query := `
-		SELECT code, amount, per_user, total, applied_count, is_active, "group", error_code
-		FROM codes
-		ORDER BY is_active DESC, applied_count DESC
-	`
-
-	rows, err := s.db.Query(query)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query codes: %w", err)
-	}
-	defer rows.Close()
-
-	var codes []*models.Code
-	for rows.Next() {
-		var code models.Code
-		var isActive int
-		err := rows.Scan(
-			&code.Code,
-			&code.Amount,
-			&code.PerUser,
-			&code.Total,
-			&code.AppliedCount,
-			&isActive,
-			&code.Group,
-			&code.ErrorCode,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to scan code: %w", err)
-		}
-		code.IsActive = isActive == 1
-		codes = append(codes, &code)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating codes: %w", err)
-	}
-
-	return codes, nil
-}
-
-// GetCodeUsage возвращает список использований кода
-func (s *SQLiteStorage) GetCodeUsage(code uuid.UUID) ([]*models.CodeUsage, error) {
-	query := `
-		SELECT id, code, user_id, count
-		FROM code_usages
-		WHERE code = ?
-	`
-
-	rows, err := s.db.Query(query, code)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query code usages: %w", err)
-	}
-	defer rows.Close()
-
-	var usages []*models.CodeUsage
-	for rows.Next() {
-		var usage models.CodeUsage
-		err := rows.Scan(
-			&usage.Id,
-			&usage.Code,
-			&usage.UserId,
-			&usage.Count,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to scan code usage: %w", err)
-		}
-		usages = append(usages, &usage)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating code usages: %w", err)
-	}
-
-	return usages, nil
-}
-
-// GetAllCodeUsages возвращает список всех использований кодов
-func (s *SQLiteStorage) GetAllCodeUsages() ([]*models.CodeUsage, error) {
-	query := `
-		SELECT id, code, user_id, count
-		FROM code_usages
-	`
-
-	rows, err := s.db.Query(query)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query all code usages: %w", err)
-	}
-	defer rows.Close()
-
-	var usages []*models.CodeUsage
-	for rows.Next() {
-		var usage models.CodeUsage
-		err := rows.Scan(
-			&usage.Id,
-			&usage.Code,
-			&usage.UserId,
-			&usage.Count,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to scan code usage: %w", err)
-		}
-		usages = append(usages, &usage)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating code usages: %w", err)
-	}
-
-	return usages, nil
-}
-
-// GetCodeUsageByUser возвращает информацию об использовании кода пользователем
-func (s *SQLiteStorage) GetCodeUsageByUser(code uuid.UUID, userId uuid.UUID) (*models.CodeUsage, error) {
-	query := `
-		SELECT id, code, user_id, count
-		FROM code_usages
-		WHERE code = ? AND user_id = ?
-	`
-
-	var usage models.CodeUsage
-	err := s.db.QueryRow(query, code, userId).Scan(
-		&usage.Id,
-		&usage.Code,
-		&usage.UserId,
-		&usage.Count,
-	)
-
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, errors.New("code usage not found")
-		}
-		return nil, fmt.Errorf("failed to get code usage by user: %w", err)
-	}
-
-	return &usage, nil
-}
-
 // AddUser добавляет нового пользователя
 func (s *SQLiteStorage) AddUser(user *models.User) error {
-	// Проверяем, существует ли пользователь с таким Telegram ID
-	checkQuery := `
-		SELECT COUNT(*)
-		FROM users
-		WHERE telegramm = ? AND deleted = 0
-	`
+	checkQuery := `SELECT COUNT(*) FROM users WHERE telegramm = ? AND deleted = 0`
 	var count int
 	err := s.db.QueryRow(checkQuery, user.Telegramm).Scan(&count)
 	if err != nil {
@@ -595,354 +197,26 @@ func (s *SQLiteStorage) AddUser(user *models.User) error {
 		return errors.New("user with this telegram ID already exists")
 	}
 
-	// Добавляем пользователя с механизмом повторных попыток
 	query := `
-		INSERT INTO users (id, telegramm, first_name, last_name, middle_name, points, "group", registration_time, deleted)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`
-
-	// Максимальное количество попыток
-	maxRetries := 5
-	// Начальная задержка между попытками (в миллисекундах)
-	baseDelay := 100 * time.Millisecond
-
-	var lastErr error
-	for i := 0; i < maxRetries; i++ {
-		_, err = s.db.Exec(query,
-			user.Id,
-			user.Telegramm,
-			user.FirstName,
-			user.LastName,
-			user.MiddleName,
-			user.Points,
-			user.Group,
-			user.RegistrationTime.Format(time.RFC3339),
-			boolToInt(user.Deleted),
-		)
-
-		if err == nil {
-			// Успешно добавили пользователя
-			return nil
-		}
-
-		lastErr = err
-
-		// Проверяем, является ли ошибка "database is locked"
-		if strings.Contains(err.Error(), "database is locked") {
-			// Экспоненциальная задержка с небольшим случайным компонентом
-			delay := baseDelay * time.Duration(1<<uint(i)) // 100ms, 200ms, 400ms, 800ms, 1600ms
-			jitter := time.Duration(rand.Int63n(int64(delay / 10)))
-			time.Sleep(delay + jitter)
-			continue
-		}
-
-		// Если ошибка не связана с блокировкой базы данных, прекращаем попытки
-		break
-	}
-
-	return fmt.Errorf("failed to add user: %w", lastErr)
-}
-
-// AddTransaction добавляет новую транзакцию
-func (s *SQLiteStorage) AddTransaction(transaction *models.Transaction) error {
-	// Начинаем транзакцию
-	tx, err := s.db.Begin()
-	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
-	}
-	defer func() {
-		if err != nil {
-			tx.Rollback()
-		}
-	}()
-
-	// Проверяем, существует ли пользователь
-	checkUserQuery := `
-		SELECT COUNT(*)
-		FROM users
-		WHERE id = ? AND deleted = 0
-	`
-	var count int
-	err = tx.QueryRow(checkUserQuery, transaction.UserId).Scan(&count)
-	if err != nil {
-		return fmt.Errorf("failed to check user existence: %w", err)
-	}
-
-	if count == 0 {
-		return errors.New("user not found")
-	}
-
-	// Добавляем транзакцию
-	insertQuery := `
-		INSERT INTO transactions (id, user_id, code, diff, time)
-		VALUES (?, ?, ?, ?, ?)
-	`
-
-	var codeValue interface{}
-	if transaction.Code == uuid.Nil {
-		codeValue = nil
-	} else {
-		codeValue = transaction.Code
-	}
-
-	_, err = tx.Exec(insertQuery,
-		transaction.Id,
-		transaction.UserId,
-		codeValue,
-		transaction.Diff,
-		transaction.Time.Format(time.RFC3339),
-	)
-
-	if err != nil {
-		return fmt.Errorf("failed to add transaction: %w", err)
-	}
-
-	// Обновляем баллы пользователя
-	updateUserQuery := `
-		UPDATE users
-		SET points = points + ?
-		WHERE id = ?
-	`
-
-	_, err = tx.Exec(updateUserQuery, transaction.Diff, transaction.UserId)
-	if err != nil {
-		return fmt.Errorf("failed to update user points: %w", err)
-	}
-
-	// Фиксируем транзакцию
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("failed to commit transaction: %w", err)
-	}
-
-	return nil
-}
-
-// AddCode добавляет новый код
-func (s *SQLiteStorage) AddCode(code *models.Code) error {
-	// Проверяем, существует ли код с таким ID
-	checkQuery := `
-		SELECT COUNT(*)
-		FROM codes
-		WHERE code = ?
-	`
-	var count int
-	err := s.db.QueryRow(checkQuery, code.Code).Scan(&count)
-	if err != nil {
-		return fmt.Errorf("failed to check existing code: %w", err)
-	}
-
-	if count > 0 {
-		return errors.New("code already exists")
-	}
-
-	// Добавляем код с механизмом повторных попыток
-	query := `
-		INSERT INTO codes (code, amount, per_user, total, applied_count, is_active, "group", error_code)
+		INSERT INTO users (id, telegramm, first_name, last_name, middle_name, "group", registration_time, deleted)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 	`
 
-	// Максимальное количество попыток
-	maxRetries := 5
-	// Начальная задержка между попытками (в миллисекундах)
-	baseDelay := 100 * time.Millisecond
-
-	var lastErr error
-	for i := 0; i < maxRetries; i++ {
-		_, err = s.db.Exec(query,
-			code.Code,
-			code.Amount,
-			code.PerUser,
-			code.Total,
-			code.AppliedCount,
-			boolToInt(code.IsActive),
-			code.Group,
-			code.ErrorCode,
-		)
-
-		if err == nil {
-			// Успешно добавили код
-			return nil
-		}
-
-		lastErr = err
-
-		// Проверяем, является ли ошибка "database is locked"
-		if strings.Contains(err.Error(), "database is locked") {
-			// Экспоненциальная задержка с небольшим случайным компонентом
-			delay := baseDelay * time.Duration(1<<uint(i)) // 100ms, 200ms, 400ms, 800ms, 1600ms
-			jitter := time.Duration(rand.Int63n(int64(delay / 10)))
-			time.Sleep(delay + jitter)
-			continue
-		}
-
-		// Если ошибка не связана с блокировкой базы данных, прекращаем попытки
-		break
-	}
-
-	return fmt.Errorf("failed to add code: %w", lastErr)
-}
-
-// AddCodeUsage добавляет использование кода
-func (s *SQLiteStorage) AddCodeUsage(usage *models.CodeUsage) error {
-	// Начинаем транзакцию
-	tx, err := s.db.Begin()
-	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
-	}
-	defer func() {
-		if err != nil {
-			tx.Rollback()
-		}
-	}()
-
-	// Проверяем, существует ли пользователь
-	checkUserQuery := `
-		SELECT COUNT(*)
-		FROM users
-		WHERE id = ? AND deleted = 0
-	`
-	var userCount int
-	err = tx.QueryRow(checkUserQuery, usage.UserId).Scan(&userCount)
-	if err != nil {
-		return fmt.Errorf("failed to check user existence: %w", err)
-	}
-
-	if userCount == 0 {
-		return errors.New("user not found")
-	}
-
-	// Проверяем, существует ли код
-	var code models.Code
-	var isActive int
-	checkCodeQuery := `
-		SELECT code, amount, per_user, total, applied_count, is_active, "group", error_code
-		FROM codes
-		WHERE code = ?
-	`
-	err = tx.QueryRow(checkCodeQuery, usage.Code).Scan(
-		&code.Code,
-		&code.Amount,
-		&code.PerUser,
-		&code.Total,
-		&code.AppliedCount,
-		&isActive,
-		&code.Group,
-		&code.ErrorCode,
+	return s.execWithRetry(query,
+		user.Id,
+		user.Telegramm,
+		user.FirstName,
+		user.LastName,
+		user.MiddleName,
+		user.Group,
+		user.RegistrationTime.Format(time.RFC3339),
+		boolToInt(user.Deleted),
 	)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return errors.New("code not found")
-		}
-		return fmt.Errorf("failed to get code info: %w", err)
-	}
-	code.IsActive = isActive == 1
-
-	// Проверяем, активен ли код
-	if !code.IsActive {
-		return errors.New("code is not active")
-	}
-
-	// Проверяем, принадлежит ли пользователь к нужной группе
-	if code.Group != "" {
-		var userGroup string
-		getUserGroupQuery := `
-			SELECT "group"
-			FROM users
-			WHERE id = ?
-		`
-		err = tx.QueryRow(getUserGroupQuery, usage.UserId).Scan(&userGroup)
-		if err != nil {
-			return fmt.Errorf("failed to get user group: %w", err)
-		}
-
-		if userGroup != code.Group {
-			return errors.New("user group does not match code group")
-		}
-	}
-
-	// Проверяем, не превышено ли количество использований кода пользователем
-	var existingUsage *models.CodeUsage
-	checkUsageQuery := `
-		SELECT id, code, user_id, count
-		FROM code_usages
-		WHERE code = ? AND user_id = ?
-	`
-	row := tx.QueryRow(checkUsageQuery, usage.Code, usage.UserId)
-	var usageExists bool
-	existingUsage = &models.CodeUsage{}
-	err = row.Scan(
-		&existingUsage.Id,
-		&existingUsage.Code,
-		&existingUsage.UserId,
-		&existingUsage.Count,
-	)
-	if err != nil {
-		if !errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("failed to check code usage: %w", err)
-		}
-		usageExists = false
-	} else {
-		usageExists = true
-		if code.PerUser > 0 && existingUsage.Count >= code.PerUser {
-			return errors.New("user code usage limit exceeded")
-		}
-	}
-
-	// Проверяем, не превышено ли общее количество использований кода
-	if code.Total > 0 && code.AppliedCount >= code.Total {
-		return errors.New("code usage limit exceeded")
-	}
-
-	// Если использование кода пользователем уже существует, обновляем его
-	if usageExists {
-		updateUsageQuery := `
-			UPDATE code_usages
-			SET count = count + 1
-			WHERE id = ?
-		`
-		_, err = tx.Exec(updateUsageQuery, existingUsage.Id)
-		if err != nil {
-			return fmt.Errorf("failed to update code usage: %w", err)
-		}
-	} else {
-		// Иначе создаем новое использование
-		insertUsageQuery := `
-			INSERT INTO code_usages (id, code, user_id, count)
-			VALUES (?, ?, ?, ?)
-		`
-		_, err = tx.Exec(insertUsageQuery, usage.Id, usage.Code, usage.UserId, usage.Count)
-		if err != nil {
-			return fmt.Errorf("failed to add code usage: %w", err)
-		}
-	}
-
-	// Увеличиваем счетчик использований кода
-	updateCodeQuery := `
-		UPDATE codes
-		SET applied_count = applied_count + 1
-		WHERE code = ?
-	`
-	_, err = tx.Exec(updateCodeQuery, code.Code)
-	if err != nil {
-		return fmt.Errorf("failed to update code applied count: %w", err)
-	}
-
-	// Фиксируем транзакцию
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("failed to commit transaction: %w", err)
-	}
-
-	return nil
 }
 
 // UpdateUser обновляет информацию о пользователе
 func (s *SQLiteStorage) UpdateUser(user *models.User) error {
-	// Проверяем, существует ли пользователь
-	checkQuery := `
-		SELECT COUNT(*)
-		FROM users
-		WHERE id = ?
-	`
+	checkQuery := `SELECT COUNT(*) FROM users WHERE id = ?`
 	var count int
 	err := s.db.QueryRow(checkQuery, user.Id).Scan(&count)
 	if err != nil {
@@ -953,191 +227,27 @@ func (s *SQLiteStorage) UpdateUser(user *models.User) error {
 		return errors.New("user not found")
 	}
 
-	// Обновляем пользователя с механизмом повторных попыток
 	query := `
 		UPDATE users
-		SET telegramm = ?, first_name = ?, last_name = ?, middle_name = ?, points = ?, "group" = ?, registration_time = ?, deleted = ?
+		SET telegramm = ?, first_name = ?, last_name = ?, middle_name = ?, "group" = ?, registration_time = ?, deleted = ?
 		WHERE id = ?
 	`
 
-	// Максимальное количество попыток
-	maxRetries := 5
-	// Начальная задержка между попытками (в миллисекундах)
-	baseDelay := 100 * time.Millisecond
-
-	var lastErr error
-	for i := 0; i < maxRetries; i++ {
-		_, err = s.db.Exec(query,
-			user.Telegramm,
-			user.FirstName,
-			user.LastName,
-			user.MiddleName,
-			user.Points,
-			user.Group,
-			user.RegistrationTime.Format(time.RFC3339),
-			boolToInt(user.Deleted),
-			user.Id,
-		)
-
-		if err == nil {
-			// Успешно обновили пользователя
-			return nil
-		}
-
-		lastErr = err
-
-		// Проверяем, является ли ошибка "database is locked"
-		if strings.Contains(err.Error(), "database is locked") {
-			// Экспоненциальная задержка с небольшим случайным компонентом
-			delay := baseDelay * time.Duration(1<<uint(i)) // 100ms, 200ms, 400ms, 800ms, 1600ms
-			jitter := time.Duration(rand.Int63n(int64(delay / 10)))
-			time.Sleep(delay + jitter)
-			continue
-		}
-
-		// Если ошибка не связана с блокировкой базы данных, прекращаем попытки
-		break
-	}
-
-	return fmt.Errorf("failed to update user: %w", lastErr)
+	return s.execWithRetry(query,
+		user.Telegramm,
+		user.FirstName,
+		user.LastName,
+		user.MiddleName,
+		user.Group,
+		user.RegistrationTime.Format(time.RFC3339),
+		boolToInt(user.Deleted),
+		user.Id,
+	)
 }
 
-// UpdateCode обновляет информацию о коде
-func (s *SQLiteStorage) UpdateCode(code *models.Code) error {
-	// Проверяем, существует ли код
-	checkQuery := `
-		SELECT COUNT(*)
-		FROM codes
-		WHERE code = ?
-	`
-	var count int
-	err := s.db.QueryRow(checkQuery, code.Code).Scan(&count)
-	if err != nil {
-		return fmt.Errorf("failed to check code existence: %w", err)
-	}
-
-	if count == 0 {
-		return errors.New("code not found")
-	}
-
-	// Обновляем код с механизмом повторных попыток
-	query := `
-		UPDATE codes
-		SET amount = ?, per_user = ?, total = ?, applied_count = ?, is_active = ?, "group" = ?, error_code = ?
-		WHERE code = ?
-	`
-
-	// Максимальное количество попыток
-	maxRetries := 5
-	// Начальная задержка между попытками (в миллисекундах)
-	baseDelay := 100 * time.Millisecond
-
-	var lastErr error
-	for i := 0; i < maxRetries; i++ {
-		_, err = s.db.Exec(query,
-			code.Amount,
-			code.PerUser,
-			code.Total,
-			code.AppliedCount,
-			boolToInt(code.IsActive),
-			code.Group,
-			code.ErrorCode,
-			code.Code,
-		)
-
-		if err == nil {
-			// Успешно обновили код
-			return nil
-		}
-
-		lastErr = err
-
-		// Проверяем, является ли ошибка "database is locked"
-		if strings.Contains(err.Error(), "database is locked") {
-			// Экспоненциальная задержка с небольшим случайным компонентом
-			delay := baseDelay * time.Duration(1<<uint(i)) // 100ms, 200ms, 400ms, 800ms, 1600ms
-			jitter := time.Duration(rand.Int63n(int64(delay / 10)))
-			time.Sleep(delay + jitter)
-			continue
-		}
-
-		// Если ошибка не связана с блокировкой базы данных, прекращаем попытки
-		break
-	}
-
-	return fmt.Errorf("failed to update code: %w", lastErr)
-}
-
-// UpdateCodeUsage обновляет информацию об использовании кода
-func (s *SQLiteStorage) UpdateCodeUsage(usage *models.CodeUsage) error {
-	// Проверяем, существует ли использование кода
-	checkQuery := `
-		SELECT COUNT(*)
-		FROM code_usages
-		WHERE id = ?
-	`
-	var count int
-	err := s.db.QueryRow(checkQuery, usage.Id).Scan(&count)
-	if err != nil {
-		return fmt.Errorf("failed to check code usage existence: %w", err)
-	}
-
-	if count == 0 {
-		return errors.New("code usage not found")
-	}
-
-	// Обновляем использование кода с механизмом повторных попыток
-	query := `
-		UPDATE code_usages
-		SET code = ?, user_id = ?, count = ?
-		WHERE id = ?
-	`
-
-	// Максимальное количество попыток
-	maxRetries := 5
-	// Начальная задержка между попытками (в миллисекундах)
-	baseDelay := 100 * time.Millisecond
-
-	var lastErr error
-	for i := 0; i < maxRetries; i++ {
-		_, err = s.db.Exec(query,
-			usage.Code,
-			usage.UserId,
-			usage.Count,
-			usage.Id,
-		)
-
-		if err == nil {
-			// Успешно обновили использование кода
-			return nil
-		}
-
-		lastErr = err
-
-		// Проверяем, является ли ошибка "database is locked"
-		if strings.Contains(err.Error(), "database is locked") {
-			// Экспоненциальная задержка с небольшим случайным компонентом
-			delay := baseDelay * time.Duration(1<<uint(i)) // 100ms, 200ms, 400ms, 800ms, 1600ms
-			jitter := time.Duration(rand.Int63n(int64(delay / 10)))
-			time.Sleep(delay + jitter)
-			continue
-		}
-
-		// Если ошибка не связана с блокировкой базы данных, прекращаем попытки
-		break
-	}
-
-	return fmt.Errorf("failed to update code usage: %w", lastErr)
-}
-
-// DeleteUser помечает пользователя как удаленного (мягкое удаление)
+// DeleteUser удаляет пользователя из базы данных
 func (s *SQLiteStorage) DeleteUser(userId uuid.UUID) error {
-	// Проверяем, существует ли пользователь
-	checkQuery := `
-		SELECT COUNT(*)
-		FROM users
-		WHERE id = ? AND deleted = 0
-	`
+	checkQuery := `SELECT COUNT(*) FROM users WHERE id = ?`
 	var count int
 	err := s.db.QueryRow(checkQuery, userId).Scan(&count)
 	if err != nil {
@@ -1148,135 +258,413 @@ func (s *SQLiteStorage) DeleteUser(userId uuid.UUID) error {
 		return errors.New("user not found")
 	}
 
-	// Помечаем пользователя как удаленного с механизмом повторных попыток
-	query := `
-		UPDATE users
-		SET deleted = 1
-		WHERE id = ?
-	`
-
-	// Максимальное количество попыток
-	maxRetries := 5
-	// Начальная задержка между попытками (в миллисекундах)
-	baseDelay := 100 * time.Millisecond
-
-	var lastErr error
-	for i := 0; i < maxRetries; i++ {
-		_, err = s.db.Exec(query, userId)
-
-		if err == nil {
-			// Успешно пометили пользователя как удаленного
-			return nil
-		}
-
-		lastErr = err
-
-		// Проверяем, является ли ошибка "database is locked"
-		if strings.Contains(err.Error(), "database is locked") {
-			// Экспоненциальная задержка с небольшим случайным компонентом
-			delay := baseDelay * time.Duration(1<<uint(i)) // 100ms, 200ms, 400ms, 800ms, 1600ms
-			jitter := time.Duration(rand.Int63n(int64(delay / 10)))
-			time.Sleep(delay + jitter)
-			continue
-		}
-
-		// Если ошибка не связана с блокировкой базы данных, прекращаем попытки
-		break
+	// Сначала освобождаем детали пазлов, принадлежащие пользователю
+	err = s.execWithRetry(`UPDATE puzzle_pieces SET owner_id = NULL, registered_at = NULL WHERE owner_id = ?`, userId)
+	if err != nil {
+		return fmt.Errorf("failed to release puzzle pieces: %w", err)
 	}
 
-	return fmt.Errorf("failed to delete user: %w", lastErr)
+	// Удаляем пользователя
+	return s.execWithRetry(`DELETE FROM users WHERE id = ?`, userId)
 }
 
-// DeleteCode деактивирует код
-func (s *SQLiteStorage) DeleteCode(code uuid.UUID) error {
-	// Проверяем, существует ли код
-	checkQuery := `
-		SELECT COUNT(*)
-		FROM codes
-		WHERE code = ?
-	`
-	var count int
-	err := s.db.QueryRow(checkQuery, code).Scan(&count)
+// ==================== МЕТОДЫ ДЛЯ ПАЗЛОВ ====================
+
+// GetPuzzle возвращает пазл по ID
+func (s *SQLiteStorage) GetPuzzle(puzzleId int) (*models.Puzzle, error) {
+	query := `SELECT id, COALESCE(name, ''), is_completed, completed_at FROM puzzles WHERE id = ?`
+
+	var puzzle models.Puzzle
+	var isCompleted int
+	var completedAtStr sql.NullString
+
+	err := s.db.QueryRow(query, puzzleId).Scan(&puzzle.Id, &puzzle.Name, &isCompleted, &completedAtStr)
 	if err != nil {
-		return fmt.Errorf("failed to check code existence: %w", err)
-	}
-
-	if count == 0 {
-		return errors.New("code not found")
-	}
-
-	// Деактивируем код с механизмом повторных попыток
-	query := `
-		UPDATE codes
-		SET is_active = 0
-		WHERE code = ?
-	`
-
-	// Максимальное количество попыток
-	maxRetries := 5
-	// Начальная задержка между попытками (в миллисекундах)
-	baseDelay := 100 * time.Millisecond
-
-	var lastErr error
-	for i := 0; i < maxRetries; i++ {
-		_, err = s.db.Exec(query, code)
-
-		if err == nil {
-			// Успешно деактивировали код
-			return nil
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, errors.New("puzzle not found")
 		}
-
-		lastErr = err
-
-		// Проверяем, является ли ошибка "database is locked"
-		if strings.Contains(err.Error(), "database is locked") {
-			// Экспоненциальная задержка с небольшим случайным компонентом
-			delay := baseDelay * time.Duration(1<<uint(i)) // 100ms, 200ms, 400ms, 800ms, 1600ms
-			jitter := time.Duration(rand.Int63n(int64(delay / 10)))
-			time.Sleep(delay + jitter)
-			continue
-		}
-
-		// Если ошибка не связана с блокировкой базы данных, прекращаем попытки
-		break
+		return nil, fmt.Errorf("failed to get puzzle: %w", err)
 	}
 
-	return fmt.Errorf("failed to deactivate code: %w", lastErr)
+	puzzle.IsCompleted = isCompleted == 1
+	if completedAtStr.Valid {
+		completedAt, _ := time.Parse(time.RFC3339, completedAtStr.String)
+		puzzle.CompletedAt = &completedAt
+	}
+
+	return &puzzle, nil
 }
 
-// CleanupTables очищает все таблицы в базе данных (для тестов)
-func (s *SQLiteStorage) CleanupTables(ctx context.Context) error {
-	// Очищаем таблицы в правильном порядке из-за внешних ключей
-	_, err := s.db.ExecContext(ctx, "DELETE FROM transactions")
+// GetAllPuzzles возвращает все пазлы
+func (s *SQLiteStorage) GetAllPuzzles() ([]*models.Puzzle, error) {
+	query := `SELECT id, COALESCE(name, ''), is_completed, completed_at FROM puzzles ORDER BY id`
+
+	rows, err := s.db.Query(query)
 	if err != nil {
-		return fmt.Errorf("failed to clean transactions table: %w", err)
+		return nil, fmt.Errorf("failed to query puzzles: %w", err)
+	}
+	defer rows.Close()
+
+	var puzzles []*models.Puzzle
+	for rows.Next() {
+		var puzzle models.Puzzle
+		var isCompleted int
+		var completedAtStr sql.NullString
+
+		err := rows.Scan(&puzzle.Id, &puzzle.Name, &isCompleted, &completedAtStr)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan puzzle: %w", err)
+		}
+
+		puzzle.IsCompleted = isCompleted == 1
+		if completedAtStr.Valid {
+			completedAt, _ := time.Parse(time.RFC3339, completedAtStr.String)
+			puzzle.CompletedAt = &completedAt
+		}
+
+		puzzles = append(puzzles, &puzzle)
 	}
 
-	_, err = s.db.ExecContext(ctx, "DELETE FROM code_usages")
-	if err != nil {
-		return fmt.Errorf("failed to clean code_usages table: %w", err)
+	return puzzles, nil
+}
+
+// UpdatePuzzle обновляет информацию о пазле
+func (s *SQLiteStorage) UpdatePuzzle(puzzle *models.Puzzle) error {
+	var completedAtStr interface{}
+	if puzzle.CompletedAt != nil {
+		completedAtStr = puzzle.CompletedAt.Format(time.RFC3339)
+	} else {
+		completedAtStr = nil
 	}
 
-	_, err = s.db.ExecContext(ctx, "DELETE FROM codes")
+	query := `UPDATE puzzles SET name = ?, is_completed = ?, completed_at = ? WHERE id = ?`
+	return s.execWithRetry(query, puzzle.Name, boolToInt(puzzle.IsCompleted), completedAtStr, puzzle.Id)
+}
+
+// CompletePuzzle отмечает пазл как собранный и возвращает владельцев деталей для уведомления
+func (s *SQLiteStorage) CompletePuzzle(puzzleId int) ([]*models.User, error) {
+	tx, err := s.db.Begin()
 	if err != nil {
-		return fmt.Errorf("failed to clean codes table: %w", err)
+		return nil, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Проверяем, что пазл существует и еще не завершен
+	var isCompleted int
+	err = tx.QueryRow(`SELECT is_completed FROM puzzles WHERE id = ?`, puzzleId).Scan(&isCompleted)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, errors.New("puzzle not found")
+		}
+		return nil, fmt.Errorf("failed to check puzzle: %w", err)
 	}
 
-	_, err = s.db.ExecContext(ctx, "DELETE FROM users")
+	if isCompleted == 1 {
+		return nil, errors.New("puzzle already completed")
+	}
+
+	// Отмечаем пазл как завершенный
+	now := time.Now().Format(time.RFC3339)
+	_, err = tx.Exec(`UPDATE puzzles SET is_completed = 1, completed_at = ? WHERE id = ?`, now, puzzleId)
 	if err != nil {
-		return fmt.Errorf("failed to clean users table: %w", err)
+		return nil, fmt.Errorf("failed to complete puzzle: %w", err)
+	}
+
+	// Получаем владельцев деталей этого пазла
+	rows, err := tx.Query(`
+		SELECT DISTINCT u.id, u.telegramm, u.first_name, u.last_name, u.middle_name, u."group", u.registration_time, u.deleted
+		FROM puzzle_pieces pp
+		JOIN users u ON pp.owner_id = u.id
+		WHERE pp.puzzle_id = ? AND pp.owner_id IS NOT NULL
+	`, puzzleId)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get piece owners: %w", err)
+	}
+	defer rows.Close()
+
+	var users []*models.User
+	for rows.Next() {
+		var user models.User
+		var deletedInt int
+		var regTimeStr string
+
+		err := rows.Scan(&user.Id, &user.Telegramm, &user.FirstName, &user.LastName, &user.MiddleName, &user.Group, &regTimeStr, &deletedInt)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan user: %w", err)
+		}
+		user.Deleted = deletedInt == 1
+		user.RegistrationTime, _ = time.Parse(time.RFC3339, regTimeStr)
+		users = append(users, &user)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	return users, nil
+}
+
+// ==================== МЕТОДЫ ДЛЯ ДЕТАЛЕЙ ПАЗЛОВ ====================
+
+// GetPuzzlePiece возвращает деталь по коду
+func (s *SQLiteStorage) GetPuzzlePiece(code string) (*models.PuzzlePiece, error) {
+	query := `SELECT code, puzzle_id, piece_number, owner_id, registered_at FROM puzzle_pieces WHERE code = ?`
+
+	var piece models.PuzzlePiece
+	var ownerIdStr sql.NullString
+	var registeredAtStr sql.NullString
+
+	err := s.db.QueryRow(query, code).Scan(
+		&piece.Code,
+		&piece.PuzzleId,
+		&piece.PieceNumber,
+		&ownerIdStr,
+		&registeredAtStr,
+	)
+
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, errors.New("piece not found")
+		}
+		return nil, fmt.Errorf("failed to get puzzle piece: %w", err)
+	}
+
+	if ownerIdStr.Valid {
+		ownerId, _ := uuid.Parse(ownerIdStr.String)
+		piece.OwnerId = &ownerId
+	}
+	if registeredAtStr.Valid {
+		registeredAt, _ := time.Parse(time.RFC3339, registeredAtStr.String)
+		piece.RegisteredAt = &registeredAt
+	}
+
+	return &piece, nil
+}
+
+// GetPuzzlePiecesByPuzzle возвращает все детали пазла
+func (s *SQLiteStorage) GetPuzzlePiecesByPuzzle(puzzleId int) ([]*models.PuzzlePiece, error) {
+	query := `SELECT code, puzzle_id, piece_number, owner_id, registered_at FROM puzzle_pieces WHERE puzzle_id = ? ORDER BY piece_number`
+
+	rows, err := s.db.Query(query, puzzleId)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query puzzle pieces: %w", err)
+	}
+	defer rows.Close()
+
+	return s.scanPuzzlePieces(rows)
+}
+
+// GetPuzzlePiecesByOwner возвращает все детали пользователя
+func (s *SQLiteStorage) GetPuzzlePiecesByOwner(ownerId uuid.UUID) ([]*models.PuzzlePiece, error) {
+	query := `SELECT code, puzzle_id, piece_number, owner_id, registered_at FROM puzzle_pieces WHERE owner_id = ? ORDER BY puzzle_id, piece_number`
+
+	rows, err := s.db.Query(query, ownerId)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query puzzle pieces by owner: %w", err)
+	}
+	defer rows.Close()
+
+	return s.scanPuzzlePieces(rows)
+}
+
+// GetAllPuzzlePieces возвращает все детали
+func (s *SQLiteStorage) GetAllPuzzlePieces() ([]*models.PuzzlePiece, error) {
+	query := `SELECT code, puzzle_id, piece_number, owner_id, registered_at FROM puzzle_pieces ORDER BY puzzle_id, piece_number`
+
+	rows, err := s.db.Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query all puzzle pieces: %w", err)
+	}
+	defer rows.Close()
+
+	return s.scanPuzzlePieces(rows)
+}
+
+// scanPuzzlePieces вспомогательная функция для сканирования деталей
+func (s *SQLiteStorage) scanPuzzlePieces(rows *sql.Rows) ([]*models.PuzzlePiece, error) {
+	var pieces []*models.PuzzlePiece
+	for rows.Next() {
+		var piece models.PuzzlePiece
+		var ownerIdStr sql.NullString
+		var registeredAtStr sql.NullString
+
+		err := rows.Scan(
+			&piece.Code,
+			&piece.PuzzleId,
+			&piece.PieceNumber,
+			&ownerIdStr,
+			&registeredAtStr,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan puzzle piece: %w", err)
+		}
+
+		if ownerIdStr.Valid {
+			ownerId, _ := uuid.Parse(ownerIdStr.String)
+			piece.OwnerId = &ownerId
+		}
+		if registeredAtStr.Valid {
+			registeredAt, _ := time.Parse(time.RFC3339, registeredAtStr.String)
+			piece.RegisteredAt = &registeredAt
+		}
+
+		pieces = append(pieces, &piece)
+	}
+	return pieces, nil
+}
+
+// AddPuzzlePiece добавляет одну деталь
+func (s *SQLiteStorage) AddPuzzlePiece(piece *models.PuzzlePiece) error {
+	query := `INSERT INTO puzzle_pieces (code, puzzle_id, piece_number, owner_id, registered_at) VALUES (?, ?, ?, ?, ?)`
+
+	var ownerIdVal interface{}
+	var registeredAtVal interface{}
+
+	if piece.OwnerId != nil {
+		ownerIdVal = piece.OwnerId.String()
+	}
+	if piece.RegisteredAt != nil {
+		registeredAtVal = piece.RegisteredAt.Format(time.RFC3339)
+	}
+
+	return s.execWithRetry(query, piece.Code, piece.PuzzleId, piece.PieceNumber, ownerIdVal, registeredAtVal)
+}
+
+// AddPuzzlePieces добавляет несколько деталей
+func (s *SQLiteStorage) AddPuzzlePieces(pieces []*models.PuzzlePiece) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			tx.Rollback()
+		}
+	}()
+
+	query := `INSERT INTO puzzle_pieces (code, puzzle_id, piece_number, owner_id, registered_at) VALUES (?, ?, ?, ?, ?)`
+	stmt, err := tx.Prepare(query)
+	if err != nil {
+		return fmt.Errorf("failed to prepare statement: %w", err)
+	}
+	defer stmt.Close()
+
+	for _, piece := range pieces {
+		var ownerIdVal interface{}
+		var registeredAtVal interface{}
+
+		if piece.OwnerId != nil {
+			ownerIdVal = piece.OwnerId.String()
+		}
+		if piece.RegisteredAt != nil {
+			registeredAtVal = piece.RegisteredAt.Format(time.RFC3339)
+		}
+
+		_, err = stmt.Exec(piece.Code, piece.PuzzleId, piece.PieceNumber, ownerIdVal, registeredAtVal)
+		if err != nil {
+			return fmt.Errorf("failed to add puzzle piece %s: %w", piece.Code, err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
 	return nil
 }
 
+// RegisterPuzzlePiece привязывает деталь к пользователю
+// Возвращает: деталь, флаг "все детали пазла розданы", ошибку
+func (s *SQLiteStorage) RegisterPuzzlePiece(code string, ownerId uuid.UUID) (*models.PuzzlePiece, bool, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			tx.Rollback()
+		}
+	}()
+
+	// Проверяем существование детали и что она еще не занята
+	var existingOwnerId sql.NullString
+	var puzzleId int
+	var pieceNumber int
+	checkQuery := `SELECT puzzle_id, piece_number, owner_id FROM puzzle_pieces WHERE code = ?`
+	err = tx.QueryRow(checkQuery, code).Scan(&puzzleId, &pieceNumber, &existingOwnerId)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, false, errors.New("piece not found")
+		}
+		return nil, false, fmt.Errorf("failed to check piece: %w", err)
+	}
+
+	if existingOwnerId.Valid {
+		return nil, false, errors.New("piece already taken")
+	}
+
+	// Привязываем деталь к пользователю
+	now := time.Now()
+	updateQuery := `UPDATE puzzle_pieces SET owner_id = ?, registered_at = ? WHERE code = ?`
+	_, err = tx.Exec(updateQuery, ownerId.String(), now.Format(time.RFC3339), code)
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to register piece: %w", err)
+	}
+
+	// Проверяем, все ли детали пазла розданы
+	countQuery := `SELECT COUNT(*) FROM puzzle_pieces WHERE puzzle_id = ? AND owner_id IS NOT NULL`
+	var count int
+	err = tx.QueryRow(countQuery, puzzleId).Scan(&count)
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to count pieces: %w", err)
+	}
+
+	allPiecesDistributed := count == 6
+
+	// Фиксируем транзакцию
+	if err := tx.Commit(); err != nil {
+		return nil, false, fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	// Возвращаем обновленную деталь
+	piece := &models.PuzzlePiece{
+		Code:         code,
+		PuzzleId:     puzzleId,
+		PieceNumber:  pieceNumber,
+		OwnerId:      &ownerId,
+		RegisteredAt: &now,
+	}
+
+	return piece, allPiecesDistributed, nil
+}
+
+// ==================== МЕТОДЫ ДЛЯ СТАТИСТИКИ ====================
+
+// GetUserPieceCount возвращает количество деталей пользователя
+func (s *SQLiteStorage) GetUserPieceCount(userId uuid.UUID) (int, error) {
+	query := `SELECT COUNT(*) FROM puzzle_pieces WHERE owner_id = ?`
+	var count int
+	err := s.db.QueryRow(query, userId).Scan(&count)
+	return count, err
+}
+
+// GetUserCompletedPuzzlePieceCount возвращает количество деталей пользователя из собранных пазлов
+func (s *SQLiteStorage) GetUserCompletedPuzzlePieceCount(userId uuid.UUID) (int, error) {
+	query := `
+		SELECT COUNT(*) FROM puzzle_pieces pp
+		JOIN puzzles p ON pp.puzzle_id = p.id
+		WHERE pp.owner_id = ? AND p.is_completed = 1
+	`
+	var count int
+	err := s.db.QueryRow(query, userId).Scan(&count)
+	return count, err
+}
+
+// ==================== МЕТОДЫ ДЛЯ АДМИНИСТРАТОРОВ ====================
+
 // GetAdmin возвращает администратора по ID
 func (s *SQLiteStorage) GetAdmin(adminId int64) (*models.Admin, error) {
-	query := `
-		SELECT id, name, username, is_active
-		FROM admins
-		WHERE id = ?
-	`
+	query := `SELECT id, name, username, is_active FROM admins WHERE id = ?`
 
 	var admin models.Admin
 	var isActive int
@@ -1295,17 +683,12 @@ func (s *SQLiteStorage) GetAdmin(adminId int64) (*models.Admin, error) {
 	}
 
 	admin.IsActive = isActive == 1
-
 	return &admin, nil
 }
 
 // GetAllAdmins возвращает список всех администраторов
 func (s *SQLiteStorage) GetAllAdmins() ([]*models.Admin, error) {
-	query := `
-		SELECT id, name, username, is_active
-		FROM admins
-		ORDER BY id
-	`
+	query := `SELECT id, name, username, is_active FROM admins ORDER BY id`
 
 	rows, err := s.db.Query(query)
 	if err != nil {
@@ -1317,12 +700,7 @@ func (s *SQLiteStorage) GetAllAdmins() ([]*models.Admin, error) {
 	for rows.Next() {
 		var admin models.Admin
 		var isActive int
-		err := rows.Scan(
-			&admin.ID,
-			&admin.Name,
-			&admin.Username,
-			&isActive,
-		)
+		err := rows.Scan(&admin.ID, &admin.Name, &admin.Username, &isActive)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan admin: %w", err)
 		}
@@ -1330,21 +708,12 @@ func (s *SQLiteStorage) GetAllAdmins() ([]*models.Admin, error) {
 		admins = append(admins, &admin)
 	}
 
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating admins: %w", err)
-	}
-
 	return admins, nil
 }
 
 // AddAdmin добавляет нового администратора
 func (s *SQLiteStorage) AddAdmin(admin *models.Admin) error {
-	// Проверяем, существует ли администратор с таким ID
-	checkQuery := `
-		SELECT COUNT(*)
-		FROM admins
-		WHERE id = ?
-	`
+	checkQuery := `SELECT COUNT(*) FROM admins WHERE id = ?`
 	var count int
 	err := s.db.QueryRow(checkQuery, admin.ID).Scan(&count)
 	if err != nil {
@@ -1355,57 +724,13 @@ func (s *SQLiteStorage) AddAdmin(admin *models.Admin) error {
 		return errors.New("admin with this ID already exists")
 	}
 
-	// Добавляем администратора с механизмом повторных попыток
-	query := `
-		INSERT INTO admins (id, name, username, is_active)
-		VALUES (?, ?, ?, ?)
-	`
-
-	// Максимальное количество попыток
-	maxRetries := 5
-	// Начальная задержка между попытками (в миллисекундах)
-	baseDelay := 100 * time.Millisecond
-
-	var lastErr error
-	for i := 0; i < maxRetries; i++ {
-		_, err = s.db.Exec(query,
-			admin.ID,
-			admin.Name,
-			admin.Username,
-			boolToInt(admin.IsActive),
-		)
-
-		if err == nil {
-			// Успешно добавили администратора
-			return nil
-		}
-
-		lastErr = err
-
-		// Проверяем, является ли ошибка "database is locked"
-		if strings.Contains(err.Error(), "database is locked") {
-			// Экспоненциальная задержка с небольшим случайным компонентом
-			delay := baseDelay * time.Duration(1<<uint(i)) // 100ms, 200ms, 400ms, 800ms, 1600ms
-			jitter := time.Duration(rand.Int63n(int64(delay / 10)))
-			time.Sleep(delay + jitter)
-			continue
-		}
-
-		// Если ошибка не связана с блокировкой базы данных, прекращаем попытки
-		break
-	}
-
-	return fmt.Errorf("failed to add admin: %w", lastErr)
+	query := `INSERT INTO admins (id, name, username, is_active) VALUES (?, ?, ?, ?)`
+	return s.execWithRetry(query, admin.ID, admin.Name, admin.Username, boolToInt(admin.IsActive))
 }
 
 // UpdateAdmin обновляет информацию об администраторе
 func (s *SQLiteStorage) UpdateAdmin(admin *models.Admin) error {
-	// Проверяем, существует ли администратор
-	checkQuery := `
-		SELECT COUNT(*)
-		FROM admins
-		WHERE id = ?
-	`
+	checkQuery := `SELECT COUNT(*) FROM admins WHERE id = ?`
 	var count int
 	err := s.db.QueryRow(checkQuery, admin.ID).Scan(&count)
 	if err != nil {
@@ -1416,58 +741,13 @@ func (s *SQLiteStorage) UpdateAdmin(admin *models.Admin) error {
 		return errors.New("admin not found")
 	}
 
-	// Обновляем администратора с механизмом повторных попыток
-	query := `
-		UPDATE admins
-		SET name = ?, username = ?, is_active = ?
-		WHERE id = ?
-	`
-
-	// Максимальное количество попыток
-	maxRetries := 5
-	// Начальная задержка между попытками (в миллисекундах)
-	baseDelay := 100 * time.Millisecond
-
-	var lastErr error
-	for i := 0; i < maxRetries; i++ {
-		_, err = s.db.Exec(query,
-			admin.Name,
-			admin.Username,
-			boolToInt(admin.IsActive),
-			admin.ID,
-		)
-
-		if err == nil {
-			// Успешно обновили администратора
-			return nil
-		}
-
-		lastErr = err
-
-		// Проверяем, является ли ошибка "database is locked"
-		if strings.Contains(err.Error(), "database is locked") {
-			// Экспоненциальная задержка с небольшим случайным компонентом
-			delay := baseDelay * time.Duration(1<<uint(i)) // 100ms, 200ms, 400ms, 800ms, 1600ms
-			jitter := time.Duration(rand.Int63n(int64(delay / 10)))
-			time.Sleep(delay + jitter)
-			continue
-		}
-
-		// Если ошибка не связана с блокировкой базы данных, прекращаем попытки
-		break
-	}
-
-	return fmt.Errorf("failed to update admin: %w", lastErr)
+	query := `UPDATE admins SET name = ?, username = ?, is_active = ? WHERE id = ?`
+	return s.execWithRetry(query, admin.Name, admin.Username, boolToInt(admin.IsActive), admin.ID)
 }
 
 // DeleteAdmin удаляет администратора
 func (s *SQLiteStorage) DeleteAdmin(adminId int64) error {
-	// Проверяем, существует ли администратор
-	checkQuery := `
-		SELECT COUNT(*)
-		FROM admins
-		WHERE id = ?
-	`
+	checkQuery := `SELECT COUNT(*) FROM admins WHERE id = ?`
 	var count int
 	err := s.db.QueryRow(checkQuery, adminId).Scan(&count)
 	if err != nil {
@@ -1478,42 +758,248 @@ func (s *SQLiteStorage) DeleteAdmin(adminId int64) error {
 		return errors.New("admin not found")
 	}
 
-	// Удаляем администратора с механизмом повторных попыток
-	query := `
-		DELETE FROM admins
-		WHERE id = ?
-	`
+	query := `DELETE FROM admins WHERE id = ?`
+	return s.execWithRetry(query, adminId)
+}
 
-	// Максимальное количество попыток
+// ==================== МЕТОДЫ ДЛЯ УВЕДОМЛЕНИЙ ====================
+
+func (s *SQLiteStorage) AddNotification(notification *models.Notification) error {
+	query := `INSERT INTO notifications (id, message, group_filter, attachments, user_ids, status, created_at, sent_at, sent_count, error_count)
+	          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+
+	attachments := strings.Join(notification.Attachments, ",")
+
+	// Сериализуем user_ids в строку через запятую
+	var userIdsStr string
+	if len(notification.UserIds) > 0 {
+		ids := make([]string, len(notification.UserIds))
+		for i, id := range notification.UserIds {
+			ids[i] = id.String()
+		}
+		userIdsStr = strings.Join(ids, ",")
+	}
+
+	return s.execWithRetry(query,
+		notification.Id.String(),
+		notification.Message,
+		notification.Group,
+		attachments,
+		userIdsStr,
+		string(notification.Status),
+		notification.CreatedAt.Format(time.RFC3339),
+		formatNullableTime(notification.SentAt),
+		notification.SentCount,
+		notification.ErrorCount,
+	)
+}
+
+func (s *SQLiteStorage) GetPendingNotifications() ([]*models.Notification, error) {
+	query := `SELECT id, message, group_filter, attachments, user_ids, status, created_at, sent_at, sent_count, error_count
+	          FROM notifications WHERE status = ? ORDER BY created_at`
+
+	rows, err := s.db.Query(query, string(models.NotificationPending))
+	if err != nil {
+		return nil, fmt.Errorf("failed to query pending notifications: %w", err)
+	}
+	defer rows.Close()
+
+	return s.scanNotifications(rows)
+}
+
+func (s *SQLiteStorage) UpdateNotification(notification *models.Notification) error {
+	query := `UPDATE notifications SET message = ?, group_filter = ?, attachments = ?, user_ids = ?, status = ?,
+	          sent_at = ?, sent_count = ?, error_count = ? WHERE id = ?`
+
+	attachments := strings.Join(notification.Attachments, ",")
+
+	// Сериализуем user_ids в строку через запятую
+	var userIdsStr string
+	if len(notification.UserIds) > 0 {
+		ids := make([]string, len(notification.UserIds))
+		for i, id := range notification.UserIds {
+			ids[i] = id.String()
+		}
+		userIdsStr = strings.Join(ids, ",")
+	}
+
+	return s.execWithRetry(query,
+		notification.Message,
+		notification.Group,
+		attachments,
+		userIdsStr,
+		string(notification.Status),
+		formatNullableTime(notification.SentAt),
+		notification.SentCount,
+		notification.ErrorCount,
+		notification.Id.String(),
+	)
+}
+
+func (s *SQLiteStorage) GetNotification(id uuid.UUID) (*models.Notification, error) {
+	query := `SELECT id, message, group_filter, attachments, user_ids, status, created_at, sent_at, sent_count, error_count
+	          FROM notifications WHERE id = ?`
+
+	var notification models.Notification
+	var idStr, attachmentsStr, userIdsStr, statusStr, createdAtStr string
+	var sentAtStr sql.NullString
+
+	err := s.db.QueryRow(query, id.String()).Scan(
+		&idStr,
+		&notification.Message,
+		&notification.Group,
+		&attachmentsStr,
+		&userIdsStr,
+		&statusStr,
+		&createdAtStr,
+		&sentAtStr,
+		&notification.SentCount,
+		&notification.ErrorCount,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, errors.New("notification not found")
+		}
+		return nil, fmt.Errorf("failed to get notification: %w", err)
+	}
+
+	notification.Id, _ = uuid.Parse(idStr)
+	notification.Status = models.NotificationStatus(statusStr)
+	notification.CreatedAt, _ = time.Parse(time.RFC3339, createdAtStr)
+	if sentAtStr.Valid && sentAtStr.String != "" {
+		t, _ := time.Parse(time.RFC3339, sentAtStr.String)
+		notification.SentAt = &t
+	}
+	if attachmentsStr != "" {
+		notification.Attachments = strings.Split(attachmentsStr, ",")
+	}
+	if userIdsStr != "" {
+		ids := strings.Split(userIdsStr, ",")
+		for _, idStr := range ids {
+			if uid, err := uuid.Parse(idStr); err == nil {
+				notification.UserIds = append(notification.UserIds, uid)
+			}
+		}
+	}
+
+	return &notification, nil
+}
+
+func (s *SQLiteStorage) GetAllNotifications() ([]*models.Notification, error) {
+	query := `SELECT id, message, group_filter, attachments, user_ids, status, created_at, sent_at, sent_count, error_count
+	          FROM notifications ORDER BY created_at DESC`
+
+	rows, err := s.db.Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query all notifications: %w", err)
+	}
+	defer rows.Close()
+
+	return s.scanNotifications(rows)
+}
+
+func (s *SQLiteStorage) scanNotifications(rows *sql.Rows) ([]*models.Notification, error) {
+	var notifications []*models.Notification
+	for rows.Next() {
+		var notification models.Notification
+		var idStr, attachmentsStr, userIdsStr, statusStr, createdAtStr string
+		var sentAtStr sql.NullString
+
+		err := rows.Scan(
+			&idStr,
+			&notification.Message,
+			&notification.Group,
+			&attachmentsStr,
+			&userIdsStr,
+			&statusStr,
+			&createdAtStr,
+			&sentAtStr,
+			&notification.SentCount,
+			&notification.ErrorCount,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan notification: %w", err)
+		}
+
+		notification.Id, _ = uuid.Parse(idStr)
+		notification.Status = models.NotificationStatus(statusStr)
+		notification.CreatedAt, _ = time.Parse(time.RFC3339, createdAtStr)
+		if sentAtStr.Valid && sentAtStr.String != "" {
+			t, _ := time.Parse(time.RFC3339, sentAtStr.String)
+			notification.SentAt = &t
+		}
+		if attachmentsStr != "" {
+			notification.Attachments = strings.Split(attachmentsStr, ",")
+		}
+		if userIdsStr != "" {
+			ids := strings.Split(userIdsStr, ",")
+			for _, idStr := range ids {
+				if uid, err := uuid.Parse(idStr); err == nil {
+					notification.UserIds = append(notification.UserIds, uid)
+				}
+			}
+		}
+
+		notifications = append(notifications, &notification)
+	}
+	return notifications, nil
+}
+
+func formatNullableTime(t *time.Time) interface{} {
+	if t == nil {
+		return nil
+	}
+	return t.Format(time.RFC3339)
+}
+
+// ==================== ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ ====================
+
+// CleanupTables очищает все таблицы в базе данных (для тестов)
+func (s *SQLiteStorage) CleanupTables(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, "DELETE FROM puzzle_pieces")
+	if err != nil {
+		return fmt.Errorf("failed to clean puzzle_pieces table: %w", err)
+	}
+
+	_, err = s.db.ExecContext(ctx, "DELETE FROM users")
+	if err != nil {
+		return fmt.Errorf("failed to clean users table: %w", err)
+	}
+
+	// Сбрасываем статус пазлов
+	_, err = s.db.ExecContext(ctx, "UPDATE puzzles SET is_completed = 0, completed_at = NULL")
+	if err != nil {
+		return fmt.Errorf("failed to reset puzzles: %w", err)
+	}
+
+	return nil
+}
+
+// execWithRetry выполняет запрос с механизмом повторных попыток
+func (s *SQLiteStorage) execWithRetry(query string, args ...interface{}) error {
 	maxRetries := 5
-	// Начальная задержка между попытками (в миллисекундах)
 	baseDelay := 100 * time.Millisecond
 
 	var lastErr error
 	for i := 0; i < maxRetries; i++ {
-		_, err = s.db.Exec(query, adminId)
-
+		_, err := s.db.Exec(query, args...)
 		if err == nil {
-			// Успешно удалили администратора
 			return nil
 		}
 
 		lastErr = err
 
-		// Проверяем, является ли ошибка "database is locked"
 		if strings.Contains(err.Error(), "database is locked") {
-			// Экспоненциальная задержка с небольшим случайным компонентом
-			delay := baseDelay * time.Duration(1<<uint(i)) // 100ms, 200ms, 400ms, 800ms, 1600ms
+			delay := baseDelay * time.Duration(1<<uint(i))
 			jitter := time.Duration(rand.Int63n(int64(delay / 10)))
 			time.Sleep(delay + jitter)
 			continue
 		}
 
-		// Если ошибка не связана с блокировкой базы данных, прекращаем попытки
 		break
 	}
 
-	return fmt.Errorf("failed to delete admin: %w", lastErr)
+	return fmt.Errorf("failed to execute query: %w", lastErr)
 }
 
 // boolToInt преобразует bool в int (для SQLite)

@@ -47,10 +47,6 @@ func main() {
 		apiTokenPath = envApiTokenPath
 	}
 
-	if envAdminsPath := os.Getenv("ADMINS_PATH"); envAdminsPath != "" {
-		// Для использования в будущем, если понадобится
-	}
-
 	if envConfigPath := os.Getenv("CONFIG_PATH"); envConfigPath == "" {
 		configPath = envConfigPath
 	}

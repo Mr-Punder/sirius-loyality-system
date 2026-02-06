@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Пазлы - Админ-панель</title>
+    <link rel="stylesheet" href="css/styles.css">
+    <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+</head>
+
+<body>
+    <div class="container" x-data="puzzlesApp()" x-init="init">
+        <!-- Навигация -->
+        <div class="nav">
+            <a href="users.html" class="nav-item">Пользователи</a>
+            <a href="puzzles.html" class="nav-item active">Пазлы</a>
+            <a href="pieces.html" class="nav-item">Детали</a>
+            <a href="admins.html" class="nav-item">Администраторы</a>
+            <a href="#" class="nav-item" @click.prevent="logout">Выход</a>
+        </div>
+
+        <!-- Заголовок -->
+        <div class="header">
+            <h1>Пазлы</h1>
+            <div class="actions">
+                <button @click="refreshPuzzles">Обновить</button>
+            </div>
+        </div>
+
+        <!-- Статистика -->
+        <div class="stats-cards" x-show="!loading">
+            <div class="stat-card">
+                <div class="stat-value" x-text="totalPuzzles"></div>
+                <div class="stat-label">Всего пазлов</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" x-text="completedPuzzles"></div>
+                <div class="stat-label">Собрано</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" x-text="inProgressPuzzles"></div>
+                <div class="stat-label">В процессе</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" x-text="notStartedPuzzles"></div>
+                <div class="stat-label">Не начаты</div>
+            </div>
+        </div>
+
+        <!-- Фильтры -->
+        <div class="filters">
+            <div class="filter-group">
+                <label for="status-filter">Статус</label>
+                <select id="status-filter" x-model="filters.status" @change="applyFilters">
+                    <option value="">Все</option>
+                    <option value="completed">Собранные</option>
+                    <option value="in_progress">В процессе</option>
+                    <option value="not_started">Не начаты</option>
+                </select>
+            </div>
+        </div>
+
+        <!-- Таблица пазлов -->
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th class="sortable" :class="getSortClass('id')" @click="sortBy('id')">№ Пазла</th>
+                        <th class="sortable" :class="getSortClass('owned_pieces')" @click="sortBy('owned_pieces')">Прогресс</th>
+                        <th class="sortable" :class="getSortClass('is_completed')" @click="sortBy('is_completed')">Статус</th>
+                        <th class="sortable" :class="getSortClass('completed_at')" @click="sortBy('completed_at')">Дата сборки</th>
+                        <th>Действия</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <template x-if="loading">
+                        <tr>
+                            <td colspan="5" style="text-align: center;">Загрузка...</td>
+                        </tr>
+                    </template>
+                    <template x-if="!loading && filteredPuzzles.length === 0">
+                        <tr>
+                            <td colspan="5" style="text-align: center;">Нет пазлов</td>
+                        </tr>
+                    </template>
+                    <template x-for="puzzle in filteredPuzzles" :key="puzzle.id">
+                        <tr :class="{ 'completed': puzzle.is_completed }">
+                            <td x-text="puzzle.id"></td>
+                            <td>
+                                <div class="progress-bar">
+                                    <div class="progress-fill" :style="'width: ' + (puzzle.owned_pieces / 6 * 100) + '%'"></div>
+                                    <span class="progress-text" x-text="puzzle.owned_pieces + '/6'"></span>
+                                </div>
+                            </td>
+                            <td>
+                                <span class="status-badge" :class="getStatusClass(puzzle)" x-text="getStatusText(puzzle)"></span>
+                            </td>
+                            <td x-text="puzzle.completed_at ? formatDate(puzzle.completed_at) : '-'"></td>
+                            <td>
+                                <button @click="viewPieces(puzzle.id)" class="btn-small">Детали</button>
+                            </td>
+                        </tr>
+                    </template>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        function puzzlesApp() {
+            return {
+                puzzles: [],
+                loading: true,
+                error: null,
+                filters: {
+                    status: ''
+                },
+                sort: {
+                    field: 'id',
+                    direction: 'asc'
+                },
+
+                init() {
+                    this.checkAuth();
+                    this.fetchPuzzles();
+                },
+
+                checkAuth() {
+                    const token = localStorage.getItem('admin_token');
+                    const expires = localStorage.getItem('token_expires');
+
+                    if (!token || !expires || new Date(expires) < new Date()) {
+                        this.logout();
+                    }
+                },
+
+                logout() {
+                    localStorage.removeItem('admin_token');
+                    localStorage.removeItem('token_expires');
+                    window.location.href = '/admin/login.html';
+                },
+
+                fetchPuzzles() {
+                    this.loading = true;
+                    const token = localStorage.getItem('admin_token');
+
+                    fetch('/api/admin/puzzles', {
+                        headers: {
+                            'Authorization': `Bearer ${token}`
+                        }
+                    })
+                        .then(response => {
+                            if (!response.ok) {
+                                if (response.status === 401) {
+                                    this.logout();
+                                    throw new Error('Требуется авторизация');
+                                }
+                                throw new Error('Ошибка загрузки пазлов');
+                            }
+                            return response.json();
+                        })
+                        .then(data => {
+                            this.puzzles = data.puzzles;
+                            this.sortPuzzles();
+                        })
+                        .catch(error => {
+                            this.error = error.message;
+                        })
+                        .finally(() => {
+                            this.loading = false;
+                        });
+                },
+
+                refreshPuzzles() {
+                    this.fetchPuzzles();
+                },
+
+                applyFilters() {
+                    // Filters applied via computed filteredPuzzles
+                },
+
+                get filteredPuzzles() {
+                    let result = [...this.puzzles];
+
+                    if (this.filters.status) {
+                        result = result.filter(puzzle => {
+                            if (this.filters.status === 'completed') {
+                                return puzzle.is_completed;
+                            } else if (this.filters.status === 'in_progress') {
+                                return !puzzle.is_completed && puzzle.owned_pieces > 0;
+                            } else if (this.filters.status === 'not_started') {
+                                return puzzle.owned_pieces === 0;
+                            }
+                            return true;
+                        });
+                    }
+
+                    return result;
+                },
+
+                get totalPuzzles() {
+                    return this.puzzles.length;
+                },
+
+                get completedPuzzles() {
+                    return this.puzzles.filter(p => p.is_completed).length;
+                },
+
+                get inProgressPuzzles() {
+                    return this.puzzles.filter(p => !p.is_completed && p.owned_pieces > 0).length;
+                },
+
+                get notStartedPuzzles() {
+                    return this.puzzles.filter(p => p.owned_pieces === 0).length;
+                },
+
+                sortBy(field) {
+                    if (this.sort.field === field) {
+                        this.sort.direction = this.sort.direction === 'asc' ? 'desc' : 'asc';
+                    } else {
+                        this.sort.field = field;
+                        this.sort.direction = 'asc';
+                    }
+                    this.sortPuzzles();
+                },
+
+                sortPuzzles() {
+                    const field = this.sort.field;
+                    const direction = this.sort.direction;
+
+                    this.puzzles.sort((a, b) => {
+                        let valueA = a[field];
+                        let valueB = b[field];
+
+                        if (field === 'completed_at') {
+                            valueA = valueA ? new Date(valueA) : new Date(0);
+                            valueB = valueB ? new Date(valueB) : new Date(0);
+                        } else if (typeof valueA === 'boolean') {
+                            valueA = valueA ? 1 : 0;
+                            valueB = valueB ? 1 : 0;
+                        }
+
+                        if (valueA < valueB) {
+                            return direction === 'asc' ? -1 : 1;
+                        }
+                        if (valueA > valueB) {
+                            return direction === 'asc' ? 1 : -1;
+                        }
+                        return 0;
+                    });
+                },
+
+                getSortClass(field) {
+                    if (this.sort.field !== field) {
+                        return '';
+                    }
+                    return this.sort.direction;
+                },
+
+                getStatusClass(puzzle) {
+                    if (puzzle.is_completed) {
+                        return 'status-completed';
+                    } else if (puzzle.owned_pieces > 0) {
+                        return 'status-progress';
+                    }
+                    return 'status-pending';
+                },
+
+                getStatusText(puzzle) {
+                    if (puzzle.is_completed) {
+                        return 'Собран';
+                    } else if (puzzle.owned_pieces > 0) {
+                        return 'В процессе';
+                    }
+                    return 'Не начат';
+                },
+
+                formatDate(dateString) {
+                    if (!dateString) return '-';
+                    const date = new Date(dateString);
+                    return date.toLocaleDateString('ru-RU', {
+                        year: 'numeric',
+                        month: 'long',
+                        day: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit'
+                    });
+                },
+
+                viewPieces(puzzleId) {
+                    window.location.href = `pieces.html?puzzle_id=${puzzleId}`;
+                }
+            };
+        }
+    </script>
+
+    <style>
+        .stats-cards {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+            flex-wrap: wrap;
+        }
+
+        .stat-card {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 1rem 1.5rem;
+            text-align: center;
+            min-width: 120px;
+            flex: 1;
+        }
+
+        .stat-value {
+            font-size: 2rem;
+            font-weight: bold;
+            color: #333;
+        }
+
+        .stat-label {
+            color: #666;
+            font-size: 0.9rem;
+        }
+
+        .progress-bar {
+            background: #e9ecef;
+            border-radius: 4px;
+            height: 24px;
+            position: relative;
+            overflow: hidden;
+            min-width: 100px;
+        }
+
+        .progress-fill {
+            background: linear-gradient(90deg, #28a745, #20c997);
+            height: 100%;
+            transition: width 0.3s ease;
+        }
+
+        .progress-text {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-weight: bold;
+            font-size: 0.85rem;
+            color: #333;
+        }
+
+        .status-badge {
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.85rem;
+            font-weight: 500;
+        }
+
+        .status-completed {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .status-progress {
+            background: #fff3cd;
+            color: #856404;
+        }
+
+        .status-pending {
+            background: #e9ecef;
+            color: #6c757d;
+        }
+
+        tr.completed {
+            background: #f0fff4;
+        }
+
+        .btn-small {
+            padding: 4px 8px;
+            font-size: 0.85rem;
+        }
+    </style>
+</body>
+
+</html>

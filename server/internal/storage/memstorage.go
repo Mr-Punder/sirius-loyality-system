@@ -3,22 +3,30 @@ package storage
 import (
 	"errors"
 	"sync"
+	"time"
 
 	"github.com/MrPunder/sirius-loyality-system/internal/models"
 	"github.com/google/uuid"
 )
 
 type Memstorage struct {
-	users        sync.Map // uuid.UUID -> *models.User
-	transactions sync.Map // uuid.UUID -> *models.Transaction
-	codes        sync.Map // uuid.UUID -> *models.Code
-	codeUsages   sync.Map // uuid.UUID -> *models.CodeUsage
-	admins       sync.Map // int64 -> *models.Admin
+	users         sync.Map // uuid.UUID -> *models.User
+	puzzles       sync.Map // int -> *models.Puzzle
+	puzzlePieces  sync.Map // string -> *models.PuzzlePiece
+	admins        sync.Map // int64 -> *models.Admin
+	notifications sync.Map // uuid.UUID -> *models.Notification
 }
 
 func NewMemstorage() *Memstorage {
-	return &Memstorage{}
+	m := &Memstorage{}
+	// Инициализируем 30 пазлов
+	for i := 1; i <= 30; i++ {
+		m.puzzles.Store(i, &models.Puzzle{Id: i, IsCompleted: false})
+	}
+	return m
 }
+
+// ==================== МЕТОДЫ ДЛЯ ПОЛЬЗОВАТЕЛЕЙ ====================
 
 func (m *Memstorage) GetUser(userId uuid.UUID) (*models.User, error) {
 	userVal, ok := m.users.Load(userId)
@@ -32,18 +40,6 @@ func (m *Memstorage) GetUser(userId uuid.UUID) (*models.User, error) {
 	return user, nil
 }
 
-func (m *Memstorage) GetUserPoints(userId uuid.UUID) (int, error) {
-	userVal, ok := m.users.Load(userId)
-	if !ok {
-		return 0, errors.New("user not found")
-	}
-	user := userVal.(*models.User)
-	if user.Deleted {
-		return 0, errors.New("user not found")
-	}
-	return user.Points, nil
-}
-
 func (m *Memstorage) GetUserByTelegramm(telegramm string) (*models.User, error) {
 	var foundUser *models.User
 
@@ -51,9 +47,9 @@ func (m *Memstorage) GetUserByTelegramm(telegramm string) (*models.User, error) 
 		user := value.(*models.User)
 		if user.Telegramm == telegramm && !user.Deleted {
 			foundUser = user
-			return false // прекращаем итерацию
+			return false
 		}
-		return true // продолжаем итерацию
+		return true
 	})
 
 	if foundUser == nil {
@@ -77,117 +73,16 @@ func (m *Memstorage) GetAllUsers() ([]*models.User, error) {
 	return users, nil
 }
 
-func (m *Memstorage) GetTransaction(transactionId uuid.UUID) (*models.Transaction, error) {
-	transactionVal, ok := m.transactions.Load(transactionId)
-	if !ok {
-		return nil, errors.New("transaction not found")
-	}
-	return transactionVal.(*models.Transaction), nil
-}
-
-func (m *Memstorage) GetUserTransactions(userId uuid.UUID) ([]*models.Transaction, error) {
-	var transactions []*models.Transaction
-
-	m.transactions.Range(func(key, value interface{}) bool {
-		transaction := value.(*models.Transaction)
-		if transaction.UserId == userId {
-			transactions = append(transactions, transaction)
-		}
-		return true // продолжаем итерацию
-	})
-
-	return transactions, nil
-}
-
-func (m *Memstorage) GetAllTransactions() ([]*models.Transaction, error) {
-	var transactions []*models.Transaction
-
-	m.transactions.Range(func(key, value interface{}) bool {
-		transaction := value.(*models.Transaction)
-		transactions = append(transactions, transaction)
-		return true
-	})
-
-	return transactions, nil
-}
-
-func (m *Memstorage) GetCodeInfo(code uuid.UUID) (*models.Code, error) {
-	codeVal, ok := m.codes.Load(code)
-	if !ok {
-		return nil, errors.New("code not found")
-	}
-	return codeVal.(*models.Code), nil
-}
-
-func (m *Memstorage) GetAllCodes() ([]*models.Code, error) {
-	var codes []*models.Code
-
-	m.codes.Range(func(key, value interface{}) bool {
-		code := value.(*models.Code)
-		codes = append(codes, code)
-		return true
-	})
-
-	return codes, nil
-}
-
-func (m *Memstorage) GetCodeUsage(code uuid.UUID) ([]*models.CodeUsage, error) {
-	var usages []*models.CodeUsage
-
-	m.codeUsages.Range(func(key, value interface{}) bool {
-		usage := value.(*models.CodeUsage)
-		if usage.Code == code {
-			usages = append(usages, usage)
-		}
-		return true // продолжаем итерацию
-	})
-
-	return usages, nil
-}
-
-func (m *Memstorage) GetAllCodeUsages() ([]*models.CodeUsage, error) {
-	var usages []*models.CodeUsage
-
-	m.codeUsages.Range(func(key, value interface{}) bool {
-		usage := value.(*models.CodeUsage)
-		usages = append(usages, usage)
-		return true
-	})
-
-	return usages, nil
-}
-
-func (m *Memstorage) GetCodeUsageByUser(code uuid.UUID, userId uuid.UUID) (*models.CodeUsage, error) {
-	var foundUsage *models.CodeUsage
-
-	m.codeUsages.Range(func(key, value interface{}) bool {
-		usage := value.(*models.CodeUsage)
-		if usage.Code == code && usage.UserId == userId {
-			foundUsage = usage
-			return false // прекращаем итерацию
-		}
-		return true // продолжаем итерацию
-	})
-
-	if foundUsage == nil {
-		return nil, errors.New("code usage not found")
-	}
-
-	return foundUsage, nil
-}
-
-// Методы для добавления данных
 func (m *Memstorage) AddUser(user *models.User) error {
-	// Проверяем, существует ли пользователь с таким Telegram ID
 	var exists bool
 
 	m.users.Range(func(key, value interface{}) bool {
 		existingUser := value.(*models.User)
 		if existingUser.Telegramm == user.Telegramm && !existingUser.Deleted {
 			exists = true
-			return false // прекращаем итерацию
+			return false
 		}
-		return true // продолжаем итерацию
+		return true
 	})
 
 	if exists {
@@ -198,98 +93,7 @@ func (m *Memstorage) AddUser(user *models.User) error {
 	return nil
 }
 
-func (m *Memstorage) AddTransaction(transaction *models.Transaction) error {
-	// Проверяем, существует ли пользователь
-	userVal, ok := m.users.Load(transaction.UserId)
-	if !ok {
-		return errors.New("user not found")
-	}
-
-	user := userVal.(*models.User)
-	if user.Deleted {
-		return errors.New("user not found")
-	}
-
-	// Обновляем баллы пользователя
-	user.Points += transaction.Diff
-	m.users.Store(user.Id, user)
-
-	// Сохраняем транзакцию
-	m.transactions.Store(transaction.Id, transaction)
-	return nil
-}
-
-func (m *Memstorage) AddCode(code *models.Code) error {
-	// Проверяем, существует ли код с таким ID
-	_, ok := m.codes.Load(code.Code)
-	if ok {
-		return errors.New("code already exists")
-	}
-
-	m.codes.Store(code.Code, code)
-	return nil
-}
-
-func (m *Memstorage) AddCodeUsage(usage *models.CodeUsage) error {
-	// Проверяем, существует ли пользователь
-	userVal, ok := m.users.Load(usage.UserId)
-	if !ok {
-		return errors.New("user not found")
-	}
-
-	user := userVal.(*models.User)
-	if user.Deleted {
-		return errors.New("user not found")
-	}
-
-	// Проверяем, существует ли код
-	codeVal, ok := m.codes.Load(usage.Code)
-	if !ok {
-		return errors.New("code not found")
-	}
-
-	code := codeVal.(*models.Code)
-
-	// Проверяем, активен ли код
-	if !code.IsActive {
-		return errors.New("code is not active")
-	}
-
-	// Проверяем, принадлежит ли пользователь к нужной группе
-	if code.Group != "" && user.Group != code.Group {
-		return errors.New("user group does not match code group")
-	}
-
-	// Проверяем, не превышено ли количество использований кода пользователем
-	existingUsage, err := m.GetCodeUsageByUser(usage.Code, usage.UserId)
-	if err == nil && code.PerUser > 0 && existingUsage.Count >= code.PerUser {
-		return errors.New("user code usage limit exceeded")
-	}
-
-	// Проверяем, не превышено ли общее количество использований кода
-	if code.Total > 0 && code.AppliedCount >= code.Total {
-		return errors.New("code usage limit exceeded")
-	}
-
-	// Если использование кода пользователем уже существует, обновляем его
-	if err == nil {
-		existingUsage.Count++
-		m.codeUsages.Store(existingUsage.Id, existingUsage)
-	} else {
-		// Иначе создаем новое использование
-		m.codeUsages.Store(usage.Id, usage)
-	}
-
-	// Увеличиваем счетчик использований кода
-	code.AppliedCount++
-	m.codes.Store(code.Code, code)
-
-	return nil
-}
-
-// Методы для обновления данных
 func (m *Memstorage) UpdateUser(user *models.User) error {
-	// Проверяем, существует ли пользователь
 	_, ok := m.users.Load(user.Id)
 	if !ok {
 		return errors.New("user not found")
@@ -299,60 +103,223 @@ func (m *Memstorage) UpdateUser(user *models.User) error {
 	return nil
 }
 
-func (m *Memstorage) UpdateCode(code *models.Code) error {
-	// Проверяем, существует ли код
-	_, ok := m.codes.Load(code.Code)
-	if !ok {
-		return errors.New("code not found")
-	}
-
-	m.codes.Store(code.Code, code)
-	return nil
-}
-
-func (m *Memstorage) UpdateCodeUsage(usage *models.CodeUsage) error {
-	// Проверяем, существует ли использование кода
-	_, ok := m.codeUsages.Load(usage.Id)
-	if !ok {
-		return errors.New("code usage not found")
-	}
-
-	m.codeUsages.Store(usage.Id, usage)
-	return nil
-}
-
-// Методы для удаления данных
 func (m *Memstorage) DeleteUser(userId uuid.UUID) error {
-	// Проверяем, существует ли пользователь
-	userVal, ok := m.users.Load(userId)
+	_, ok := m.users.Load(userId)
 	if !ok {
 		return errors.New("user not found")
 	}
 
-	// Помечаем пользователя как удаленного (мягкое удаление)
-	user := userVal.(*models.User)
-	user.Deleted = true
-	m.users.Store(userId, user)
+	// Освобождаем детали пазлов пользователя
+	m.puzzlePieces.Range(func(key, value interface{}) bool {
+		piece := value.(*models.PuzzlePiece)
+		if piece.OwnerId != nil && *piece.OwnerId == userId {
+			piece.OwnerId = nil
+			piece.RegisteredAt = nil
+			m.puzzlePieces.Store(key, piece)
+		}
+		return true
+	})
 
+	// Удаляем пользователя
+	m.users.Delete(userId)
 	return nil
 }
 
-func (m *Memstorage) DeleteCode(code uuid.UUID) error {
-	// Проверяем, существует ли код
-	codeVal, ok := m.codes.Load(code)
+// ==================== МЕТОДЫ ДЛЯ ПАЗЛОВ ====================
+
+func (m *Memstorage) GetPuzzle(puzzleId int) (*models.Puzzle, error) {
+	puzzleVal, ok := m.puzzles.Load(puzzleId)
 	if !ok {
-		return errors.New("code not found")
+		return nil, errors.New("puzzle not found")
+	}
+	return puzzleVal.(*models.Puzzle), nil
+}
+
+func (m *Memstorage) GetAllPuzzles() ([]*models.Puzzle, error) {
+	var puzzles []*models.Puzzle
+
+	m.puzzles.Range(func(key, value interface{}) bool {
+		puzzle := value.(*models.Puzzle)
+		puzzles = append(puzzles, puzzle)
+		return true
+	})
+
+	return puzzles, nil
+}
+
+func (m *Memstorage) UpdatePuzzle(puzzle *models.Puzzle) error {
+	_, ok := m.puzzles.Load(puzzle.Id)
+	if !ok {
+		return errors.New("puzzle not found")
 	}
 
-	// Деактивируем код
-	codeInfo := codeVal.(*models.Code)
-	codeInfo.IsActive = false
-	m.codes.Store(code, codeInfo)
-
+	m.puzzles.Store(puzzle.Id, puzzle)
 	return nil
 }
 
-// Методы для работы с администраторами
+// ==================== МЕТОДЫ ДЛЯ ДЕТАЛЕЙ ПАЗЛОВ ====================
+
+func (m *Memstorage) GetPuzzlePiece(code string) (*models.PuzzlePiece, error) {
+	pieceVal, ok := m.puzzlePieces.Load(code)
+	if !ok {
+		return nil, errors.New("piece not found")
+	}
+	return pieceVal.(*models.PuzzlePiece), nil
+}
+
+func (m *Memstorage) GetPuzzlePiecesByPuzzle(puzzleId int) ([]*models.PuzzlePiece, error) {
+	var pieces []*models.PuzzlePiece
+
+	m.puzzlePieces.Range(func(key, value interface{}) bool {
+		piece := value.(*models.PuzzlePiece)
+		if piece.PuzzleId == puzzleId {
+			pieces = append(pieces, piece)
+		}
+		return true
+	})
+
+	return pieces, nil
+}
+
+func (m *Memstorage) GetPuzzlePiecesByOwner(ownerId uuid.UUID) ([]*models.PuzzlePiece, error) {
+	var pieces []*models.PuzzlePiece
+
+	m.puzzlePieces.Range(func(key, value interface{}) bool {
+		piece := value.(*models.PuzzlePiece)
+		if piece.OwnerId != nil && *piece.OwnerId == ownerId {
+			pieces = append(pieces, piece)
+		}
+		return true
+	})
+
+	return pieces, nil
+}
+
+func (m *Memstorage) GetAllPuzzlePieces() ([]*models.PuzzlePiece, error) {
+	var pieces []*models.PuzzlePiece
+
+	m.puzzlePieces.Range(func(key, value interface{}) bool {
+		piece := value.(*models.PuzzlePiece)
+		pieces = append(pieces, piece)
+		return true
+	})
+
+	return pieces, nil
+}
+
+func (m *Memstorage) AddPuzzlePiece(piece *models.PuzzlePiece) error {
+	_, ok := m.puzzlePieces.Load(piece.Code)
+	if ok {
+		return errors.New("piece already exists")
+	}
+
+	m.puzzlePieces.Store(piece.Code, piece)
+	return nil
+}
+
+func (m *Memstorage) AddPuzzlePieces(pieces []*models.PuzzlePiece) error {
+	for _, piece := range pieces {
+		if err := m.AddPuzzlePiece(piece); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *Memstorage) RegisterPuzzlePiece(code string, ownerId uuid.UUID) (*models.PuzzlePiece, bool, error) {
+	pieceVal, ok := m.puzzlePieces.Load(code)
+	if !ok {
+		return nil, false, errors.New("piece not found")
+	}
+
+	piece := pieceVal.(*models.PuzzlePiece)
+	if piece.OwnerId != nil {
+		return nil, false, errors.New("piece already taken")
+	}
+
+	// Привязываем деталь
+	now := time.Now()
+	piece.OwnerId = &ownerId
+	piece.RegisteredAt = &now
+	m.puzzlePieces.Store(code, piece)
+
+	// Проверяем, все ли детали пазла розданы
+	pieces, _ := m.GetPuzzlePiecesByPuzzle(piece.PuzzleId)
+	ownedCount := 0
+	for _, p := range pieces {
+		if p.OwnerId != nil {
+			ownedCount++
+		}
+	}
+
+	allPiecesDistributed := ownedCount == 6
+
+	return piece, allPiecesDistributed, nil
+}
+
+// CompletePuzzle отмечает пазл как собранный и возвращает владельцев деталей для уведомления
+func (m *Memstorage) CompletePuzzle(puzzleId int) ([]*models.User, error) {
+	puzzleVal, ok := m.puzzles.Load(puzzleId)
+	if !ok {
+		return nil, errors.New("puzzle not found")
+	}
+
+	puzzle := puzzleVal.(*models.Puzzle)
+	if puzzle.IsCompleted {
+		return nil, errors.New("puzzle already completed")
+	}
+
+	// Отмечаем пазл как завершенный
+	now := time.Now()
+	puzzle.IsCompleted = true
+	puzzle.CompletedAt = &now
+	m.puzzles.Store(puzzleId, puzzle)
+
+	// Собираем уникальных владельцев деталей
+	ownerIds := make(map[uuid.UUID]bool)
+	m.puzzlePieces.Range(func(key, value interface{}) bool {
+		piece := value.(*models.PuzzlePiece)
+		if piece.PuzzleId == puzzleId && piece.OwnerId != nil {
+			ownerIds[*piece.OwnerId] = true
+		}
+		return true
+	})
+
+	var users []*models.User
+	for ownerId := range ownerIds {
+		userVal, ok := m.users.Load(ownerId)
+		if ok {
+			users = append(users, userVal.(*models.User))
+		}
+	}
+
+	return users, nil
+}
+
+// ==================== МЕТОДЫ ДЛЯ СТАТИСТИКИ ====================
+
+func (m *Memstorage) GetUserPieceCount(userId uuid.UUID) (int, error) {
+	pieces, _ := m.GetPuzzlePiecesByOwner(userId)
+	return len(pieces), nil
+}
+
+func (m *Memstorage) GetUserCompletedPuzzlePieceCount(userId uuid.UUID) (int, error) {
+	pieces, _ := m.GetPuzzlePiecesByOwner(userId)
+	count := 0
+	for _, piece := range pieces {
+		puzzleVal, ok := m.puzzles.Load(piece.PuzzleId)
+		if ok {
+			puzzle := puzzleVal.(*models.Puzzle)
+			if puzzle.IsCompleted {
+				count++
+			}
+		}
+	}
+	return count, nil
+}
+
+// ==================== МЕТОДЫ ДЛЯ АДМИНИСТРАТОРОВ ====================
+
 func (m *Memstorage) GetAdmin(adminId int64) (*models.Admin, error) {
 	adminVal, ok := m.admins.Load(adminId)
 	if !ok {
@@ -376,7 +343,6 @@ func (m *Memstorage) GetAllAdmins() ([]*models.Admin, error) {
 }
 
 func (m *Memstorage) AddAdmin(admin *models.Admin) error {
-	// Проверяем, существует ли администратор с таким ID
 	_, ok := m.admins.Load(admin.ID)
 	if ok {
 		return errors.New("admin with this ID already exists")
@@ -387,7 +353,6 @@ func (m *Memstorage) AddAdmin(admin *models.Admin) error {
 }
 
 func (m *Memstorage) UpdateAdmin(admin *models.Admin) error {
-	// Проверяем, существует ли администратор
 	_, ok := m.admins.Load(admin.ID)
 	if !ok {
 		return errors.New("admin not found")
@@ -398,13 +363,62 @@ func (m *Memstorage) UpdateAdmin(admin *models.Admin) error {
 }
 
 func (m *Memstorage) DeleteAdmin(adminId int64) error {
-	// Проверяем, существует ли администратор
 	_, ok := m.admins.Load(adminId)
 	if !ok {
 		return errors.New("admin not found")
 	}
 
-	// Удаляем администратора
 	m.admins.Delete(adminId)
 	return nil
+}
+
+// ==================== МЕТОДЫ ДЛЯ УВЕДОМЛЕНИЙ ====================
+
+func (m *Memstorage) AddNotification(notification *models.Notification) error {
+	m.notifications.Store(notification.Id, notification)
+	return nil
+}
+
+func (m *Memstorage) GetPendingNotifications() ([]*models.Notification, error) {
+	var notifications []*models.Notification
+
+	m.notifications.Range(func(key, value interface{}) bool {
+		notification := value.(*models.Notification)
+		if notification.Status == models.NotificationPending {
+			notifications = append(notifications, notification)
+		}
+		return true
+	})
+
+	return notifications, nil
+}
+
+func (m *Memstorage) UpdateNotification(notification *models.Notification) error {
+	_, ok := m.notifications.Load(notification.Id)
+	if !ok {
+		return errors.New("notification not found")
+	}
+
+	m.notifications.Store(notification.Id, notification)
+	return nil
+}
+
+func (m *Memstorage) GetNotification(id uuid.UUID) (*models.Notification, error) {
+	notificationVal, ok := m.notifications.Load(id)
+	if !ok {
+		return nil, errors.New("notification not found")
+	}
+	return notificationVal.(*models.Notification), nil
+}
+
+func (m *Memstorage) GetAllNotifications() ([]*models.Notification, error) {
+	var notifications []*models.Notification
+
+	m.notifications.Range(func(key, value interface{}) bool {
+		notification := value.(*models.Notification)
+		notifications = append(notifications, notification)
+		return true
+	})
+
+	return notifications, nil
 }

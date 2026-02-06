@@ -41,10 +41,10 @@ func main() {
 		store, storeErr = storage.NewFilestorage(conf.Storage.DataPath)
 	case "postgres":
 		log.Info("Initializing PostgreSQL storage")
-		store, storeErr = storage.NewPgStorage(conf.Storage.ConnectionString, conf.Storage.MigrationsPath)
+		store, storeErr = storage.NewPgStorage(conf.Storage.ConnectionString)
 	case "sqlite":
 		log.Info("Initializing SQLite storage")
-		store, storeErr = storage.NewSQLiteStorage(conf.Storage.DBPath, conf.Storage.MigrationsPath)
+		store, storeErr = storage.NewSQLiteStorage(conf.Storage.DBPath)
 	default:
 		log.Info("Initializing memory storage")
 		store = storage.NewMemstorage()

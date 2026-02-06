@@ -14,7 +14,8 @@
         <!-- Навигация -->
         <div class="nav">
             <a href="users.html" class="nav-item active">Пользователи</a>
-            <a href="codes.html" class="nav-item">Генерация QR-кодов</a>
+            <a href="puzzles.html" class="nav-item">Пазлы</a>
+            <a href="pieces.html" class="nav-item">Детали</a>
             <a href="admins.html" class="nav-item">Администраторы</a>
             <a href="#" class="nav-item" @click.prevent="logout">Выход</a>
         </div>
@@ -65,7 +66,7 @@
                         </th>
                         <th class="sortable" :class="getSortClass('middle_name')" @click="sortBy('middle_name')">
                             Отчество</th>
-                        <th class="sortable" :class="getSortClass('points')" @click="sortBy('points')">Баллы</th>
+                        <th class="sortable" :class="getSortClass('piece_count')" @click="sortBy('piece_count')">Деталей</th>
                         <th class="sortable" :class="getSortClass('group')" @click="sortBy('group')">Группа</th>
                         <th class="sortable" :class="getSortClass('registration_time')"
                             @click="sortBy('registration_time')">Дата регистрации</th>
@@ -120,17 +121,7 @@
                                         @keydown.enter="saveEdit(user, 'middle_name')" @keydown.escape="cancelEdit">
                                 </template>
                             </td>
-                            <td class="editable" @click="editField(user, 'points')"
-                                :class="{ 'editing': isEditing(user, 'points') }">
-                                <template x-if="!isEditing(user, 'points')">
-                                    <span x-text="user.points"></span>
-                                </template>
-                                <template x-if="isEditing(user, 'points')">
-                                    <input type="number" class="edit-input" x-model="editValue"
-                                        @blur="saveEdit(user, 'points')" @keydown.enter="saveEdit(user, 'points')"
-                                        @keydown.escape="cancelEdit">
-                                </template>
-                            </td>
+                            <td x-text="user.piece_count"></td>
                             <td class="editable" @click="editField(user, 'group')"
                                 :class="{ 'editing': isEditing(user, 'group') }">
                                 <template x-if="!isEditing(user, 'group')">
@@ -294,7 +285,7 @@
                         if (field === 'registration_time') {
                             valueA = new Date(valueA);
                             valueB = new Date(valueB);
-                        } else if (field === 'points') {
+                        } else if (field === 'piece_count') {
                             valueA = Number(valueA);
                             valueB = Number(valueB);
                         } else if (typeof valueA === 'string') {
@@ -361,7 +352,7 @@
 
                     // Формируем данные для обновления
                     const updateData = {};
-                    updateData[field] = field === 'points' ? Number(this.editValue) : this.editValue;
+                    updateData[field] = this.editValue;
 
                     fetch(`/api/admin/users/update?id=${user.id}`, {
                         method: 'POST',

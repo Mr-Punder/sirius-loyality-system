@@ -12,46 +12,34 @@ type User struct {
 	FirstName        string    `json:"first_name"`
 	LastName         string    `json:"last_name"`
 	MiddleName       string    `json:"middle_name"`
-	Points           int       `json:"points"`
 	Group            string    `json:"group"`
 	RegistrationTime time.Time `json:"registration_time"`
 	Deleted          bool      `json:"deleted"`
 }
 
-type Transaction struct {
-	Id     uuid.UUID `json:"id"`
-	UserId uuid.UUID `json:"user_id"`
-	Code   uuid.UUID `json:"code"`
-	Diff   int       `json:"diff"`
-	Time   time.Time `json:"time"`
+// Puzzle представляет пазл (всего 30 пазлов по 6 деталей)
+type Puzzle struct {
+	Id          int        `json:"id"`           // 1-30
+	Name        string     `json:"name"`         // Название пазла
+	IsCompleted bool       `json:"is_completed"` // Засчитан ли пазл админом
+	CompletedAt *time.Time `json:"completed_at,omitempty"`
 }
 
-type Code struct {
-	Code         uuid.UUID `json:"code"`
-	Amount       int       `json:"amount"`
-	PerUser      int       `json:"per_user"`
-	Total        int       `json:"total"`
-	AppliedCount int       `json:"applied_count"`
-	IsActive     bool      `json:"is_active"`
-	Group        string    `json:"group"`
-	ErrorCode    int       `json:"error_code"`
+// PuzzlePiece представляет деталь пазла
+type PuzzlePiece struct {
+	Code         string     `json:"code"`                    // Уникальный 7-символьный код, например "PY1GG7H"
+	PuzzleId     int        `json:"puzzle_id"`               // К какому пазлу принадлежит (1-30)
+	PieceNumber  int        `json:"piece_number"`            // Номер детали в пазле (1-6)
+	OwnerId      *uuid.UUID `json:"owner_id,omitempty"`      // Кто зарегистрировал деталь
+	RegisteredAt *time.Time `json:"registered_at,omitempty"` // Когда была зарегистрирована
 }
 
-// Константы для кодов ошибок
+// Константы для кодов ошибок деталей пазлов
 const (
-	ErrorCodeNone               = 0
-	ErrorCodeUserLimitExceeded  = 1 // Превышено количество использований кода пользователем
-	ErrorCodeTotalLimitExceeded = 2 // Превышено общее количество использований кода
-	ErrorCodeInvalidGroup       = 3 // Пользователь не принадлежит к группе, для которой предназначен код
-	ErrorCodeCodeInactive       = 4 // Код не активен
+	PieceErrorNone         = 0 // Нет ошибки
+	PieceErrorNotFound     = 1 // Код детали не найден
+	PieceErrorAlreadyTaken = 2 // Деталь уже принадлежит другому пользователю
 )
-
-type CodeUsage struct {
-	Id     uuid.UUID `json:"id"`
-	Code   uuid.UUID `json:"code"`
-	UserId uuid.UUID `json:"user_id"`
-	Count  int       `json:"count"`
-}
 
 // Admin представляет информацию об администраторе
 type Admin struct {
@@ -59,6 +47,29 @@ type Admin struct {
 	Name     string `json:"name"`
 	Username string `json:"username,omitempty"`
 	IsActive bool   `json:"is_active"`
+}
+
+// NotificationStatus статус уведомления
+type NotificationStatus string
+
+const (
+	NotificationPending NotificationStatus = "pending"
+	NotificationSent    NotificationStatus = "sent"
+	NotificationFailed  NotificationStatus = "failed"
+)
+
+// Notification представляет уведомление для рассылки
+type Notification struct {
+	Id          uuid.UUID          `json:"id"`
+	Message     string             `json:"message"`               // Текст сообщения
+	Group       string             `json:"group,omitempty"`       // Группа (пустая = смотрим UserIds)
+	UserIds     []uuid.UUID        `json:"user_ids,omitempty"`    // Конкретные пользователи (если Group пустая)
+	Attachments []string           `json:"attachments,omitempty"` // Имена файлов вложений (лежат в attachments/{id}/)
+	Status      NotificationStatus `json:"status"`
+	CreatedAt   time.Time          `json:"created_at"`
+	SentAt      *time.Time         `json:"sent_at,omitempty"`
+	SentCount   int                `json:"sent_count"`  // Сколько сообщений отправлено
+	ErrorCount  int                `json:"error_count"` // Сколько ошибок
 }
 
 // GetCurrentTime возвращает текущее время

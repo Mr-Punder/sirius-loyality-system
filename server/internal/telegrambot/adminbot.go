@@ -1,19 +1,14 @@
 package telegrambot
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/MrPunder/sirius-loyality-system/internal/logger"
 	"github.com/MrPunder/sirius-loyality-system/internal/models"
 	"github.com/MrPunder/sirius-loyality-system/internal/storage"
-	"github.com/google/uuid"
 	tele "gopkg.in/telebot.v3"
 )
 
@@ -30,27 +25,23 @@ type AdminsList struct {
 
 // BotState представляет состояние бота для конкретного пользователя
 type BotState struct {
-	State       string            // Текущее состояние
-	Params      map[string]string // Параметры, собранные на предыдущих шагах
-	LastMsgID   int               // ID последнего сообщения бота для возможного редактирования
-	LastMsgText string            // Текст последнего сообщения
+	State       string
+	Params      map[string]string
+	LastMsgID   int
+	LastMsgText string
 }
 
 // AdminBot представляет бота для администраторов
 type AdminBot struct {
-	bot        *tele.Bot
-	logger     logger.Logger
-	config     Config
-	admins     AdminsList
-	adminsPath string
-	states     map[int64]*BotState // Состояния пользователей по их ID
-	apiClient  *APIClient
+	bot       *tele.Bot
+	logger    logger.Logger
+	config    Config
+	states    map[int64]*BotState
+	apiClient *APIClient
 }
 
 // NewAdminBot создает нового бота для администраторов
 func NewAdminBot(config Config, storage storage.Storage, logger logger.Logger) (*AdminBot, error) {
-	// Определяем путь к файлу с администраторами
-	adminsPath := filepath.Join("cmd", "telegrambot", "admin", "admins.json")
 	pref := tele.Settings{
 		Token:  config.Token,
 		Poller: &tele.LongPoller{Timeout: 10},
@@ -61,39 +52,20 @@ func NewAdminBot(config Config, storage storage.Storage, logger logger.Logger) (
 		return nil, fmt.Errorf("ошибка создания бота: %w", err)
 	}
 
-	// Создаем API-клиент
 	apiClient := NewAPIClient(config.ServerURL, config.APIToken, logger)
 
-	// Создаем бота
 	adminBot := &AdminBot{
-		bot:        bot,
-		logger:     logger,
-		config:     config,
-		adminsPath: adminsPath,
-		states:     make(map[int64]*BotState),
-		apiClient:  apiClient,
+		bot:       bot,
+		logger:    logger,
+		config:    config,
+		states:    make(map[int64]*BotState),
+		apiClient: apiClient,
 	}
 
-	// Загружаем список администраторов
-	if err := adminBot.loadAdmins(); err != nil {
-		logger.Errorf("Ошибка загрузки списка администраторов: %v", err)
-		// Создаем пустой список
-		adminBot.admins = AdminsList{
-			Admins: []AdminInfo{},
-		}
-
-		// Если указан ID администратора в конфигурации, добавляем его
-		if config.AdminUserID != 0 {
-			adminBot.admins.Admins = append(adminBot.admins.Admins, AdminInfo{
-				ID: config.AdminUserID,
-			})
-			logger.Infof("Добавлен администратор с ID %d из параметров запуска", config.AdminUserID)
-
-			// Сохраняем список администраторов только если он был изменен
-			if err := adminBot.saveAdmins(); err != nil {
-				logger.Errorf("Ошибка сохранения списка администраторов: %v", err)
-			}
-		}
+	// Если указан начальный админ, добавляем его в БД
+	if config.AdminUserID != 0 {
+		adminBot.addAdminViaAPI(config.AdminUserID, "Initial Admin")
+		logger.Infof("Добавлен начальный администратор с ID %d", config.AdminUserID)
 	}
 
 	return adminBot, nil
@@ -112,11 +84,17 @@ func (ab *AdminBot) Start() error {
 	// Обработчик команды /user
 	ab.bot.Handle("/user", ab.handleUser)
 
-	// Обработчик команды /addpoints
-	ab.bot.Handle("/addpoints", ab.handleAddPoints)
+	// Обработчик команды /puzzles
+	ab.bot.Handle("/puzzles", ab.handlePuzzles)
 
-	// Обработчик команды /generatecode
-	ab.bot.Handle("/generatecode", ab.handleGenerateCode)
+	// Обработчик команды /pieces
+	ab.bot.Handle("/pieces", ab.handlePiecesCommand)
+
+	// Обработчик команды /lottery
+	ab.bot.Handle("/lottery", ab.handleLottery)
+
+	// Обработчик команды /complete для засчитывания пазла
+	ab.bot.Handle("/complete", ab.handleCompletePuzzle)
 
 	// Обработчик команды /addadmin
 	ab.bot.Handle("/addadmin", ab.handleAddAdmin)
@@ -129,19 +107,20 @@ func (ab *AdminBot) Start() error {
 
 	// Обработчики кнопок главного меню
 	ab.bot.Handle("👥 Пользователи", ab.handleUsersButton)
-	ab.bot.Handle("🔑 QR-коды", ab.handleCodesButton)
+	ab.bot.Handle("🧩 Пазлы", ab.handlePuzzlesButton)
 	ab.bot.Handle("👮 Администраторы", ab.handleAdminsButton)
 	ab.bot.Handle("📣 Рассылка", ab.handleBroadcastButton)
+	ab.bot.Handle("🎲 Розыгрыш", ab.handleLotteryButton)
 	ab.bot.Handle("❓ Помощь", ab.handleHelp)
 
 	// Обработчики кнопок меню пользователей
 	ab.bot.Handle("👥 Все пользователи", ab.handleAllUsersButton)
 	ab.bot.Handle("👨‍👩‍👧‍👦 По группам", ab.handleUsersByGroupButton)
-	ab.bot.Handle("➕ Добавить баллы", ab.handleAddPointsButton)
 
-	// Обработчики кнопок меню QR-кодов
-	ab.bot.Handle("🔑 Список QR-кодов", ab.handleListCodesButton)
-	ab.bot.Handle("➕ Сгенерировать QR-код", ab.handleGenerateCodeButton)
+	// Обработчики кнопок меню пазлов
+	ab.bot.Handle("🧩 Список пазлов", ab.handleListPuzzlesButton)
+	ab.bot.Handle("📋 Список деталей", ab.handleListPiecesButton)
+	ab.bot.Handle("✅ Засчитать пазл", ab.handleCompletePuzzleButton)
 
 	// Обработчики кнопок меню администраторов
 	ab.bot.Handle("👮 Список администраторов", ab.handleListAdmins)
@@ -172,157 +151,42 @@ func (ab *AdminBot) Start() error {
 
 // handleText обрабатывает текстовые сообщения
 func (ab *AdminBot) handleText(c tele.Context) error {
-	// Проверяем, является ли пользователь администратором
 	if !ab.isAdmin(c.Sender().ID) {
 		return c.Send("У вас нет доступа к этому боту.")
 	}
 
-	// Получаем текст сообщения
 	text := c.Text()
 	userID := c.Sender().ID
 
-	// Проверяем, есть ли у пользователя активное состояние
 	state, ok := ab.states[userID]
 	if !ok {
-		// Если нет активного состояния, отправляем справку
 		keyboard := ab.createMainKeyboard()
 		return c.Send("Используйте кнопки для навигации или /help для просмотра доступных команд.", keyboard)
 	}
 
-	// Обрабатываем сообщение в зависимости от текущего состояния
 	switch state.State {
 	case "broadcast_text":
-		// Обрабатываем ввод текста для рассылки
 		return ab.handleBroadcastText(c, state)
 
 	case "broadcast_group":
-		// Пользователь вводит группу для рассылки
-		// Проверяем, соответствует ли группа формату
 		if text == "🌐 Все группы" {
-			// Рассылка всем пользователям
 			return ab.broadcastMessage(c, state.Params["text"], "")
 		} else if GroupRegex.MatchString(text) {
-			// Нормализуем группу
 			normalizedGroup, _ := NormalizeGroupName(text)
-			// Рассылка пользователям выбранной группы
 			return ab.broadcastMessage(c, state.Params["text"], normalizedGroup)
 		} else {
 			return c.Send("Неверный формат группы. Группа должна быть от Н1 до Н6 (или H1 до H6).")
 		}
 
-	case "generate_code_amount":
-		// Пользователь вводит количество баллов для QR-кода
-		_, err := strconv.Atoi(text)
-		if err != nil {
-			return c.Send("Неверный формат количества баллов. Пожалуйста, введите целое число.")
-		}
-
-		// Сохраняем количество баллов
-		state.Params["amount"] = text
-
-		// Переходим к следующему шагу - ввод ограничения на пользователя
-		state.State = "generate_code_per_user"
-
-		// Создаем клавиатуру с кнопкой "Без ограничений"
-		keyboard := &tele.ReplyMarkup{ResizeKeyboard: true}
-		btnNoLimits := keyboard.Text("🚫 Без ограничений")
-		btnCancel := keyboard.Text("❌ Отмена")
-		keyboard.Reply(
-			keyboard.Row(btnNoLimits),
-			keyboard.Row(btnCancel),
-		)
-
-		// Отправляем сообщение с запросом ограничения на пользователя
-		return c.Send("Введите максимальное количество использований одним пользователем или нажмите кнопку 'Без ограничений':", keyboard)
-
-	case "generate_code_per_user":
-		// Пользователь вводит ограничение на пользователя
-		_, err := strconv.Atoi(text)
-		if err != nil {
-			return c.Send("Неверный формат ограничения. Пожалуйста, введите целое число.")
-		}
-
-		// Сохраняем ограничение на пользователя
-		state.Params["per_user"] = text
-
-		// Переходим к следующему шагу - ввод общего ограничения
-		state.State = "generate_code_total"
-
-		// Создаем клавиатуру с кнопкой "Без ограничений"
-		keyboard := &tele.ReplyMarkup{ResizeKeyboard: true}
-		btnNoLimits := keyboard.Text("🚫 Без ограничений")
-		btnCancel := keyboard.Text("❌ Отмена")
-		keyboard.Reply(
-			keyboard.Row(btnNoLimits),
-			keyboard.Row(btnCancel),
-		)
-
-		// Отправляем сообщение с запросом общего ограничения
-		return c.Send("Введите общее количество использований или нажмите кнопку 'Без ограничений':", keyboard)
-
-	case "generate_code_total":
-		// Пользователь вводит общее ограничение
-		_, err := strconv.Atoi(text)
-		if err != nil {
-			return c.Send("Неверный формат ограничения. Пожалуйста, введите целое число.")
-		}
-
-		// Сохраняем общее ограничение
-		state.Params["total"] = text
-
-		// Переходим к следующему шагу - ввод группы
-		state.State = "generate_code_group"
-
-		// Создаем клавиатуру с кнопками групп
-		keyboard := &tele.ReplyMarkup{ResizeKeyboard: true}
-		btnN1 := keyboard.Text("Н1")
-		btnN2 := keyboard.Text("Н2")
-		btnN3 := keyboard.Text("Н3")
-		btnN4 := keyboard.Text("Н4")
-		btnN5 := keyboard.Text("Н5")
-		btnN6 := keyboard.Text("Н6")
-		btnNoLimits := keyboard.Text("🚫 Без ограничений")
-		btnCancel := keyboard.Text("❌ Отмена")
-		keyboard.Reply(
-			keyboard.Row(btnN1, btnN2, btnN3),
-			keyboard.Row(btnN4, btnN5, btnN6),
-			keyboard.Row(btnNoLimits),
-			keyboard.Row(btnCancel),
-		)
-
-		// Отправляем сообщение с запросом группы
-		return c.Send("Выберите группу или нажмите кнопку 'Без ограничений':", keyboard)
-
-	case "generate_code_group":
-		// Пользователь вводит группу
-		// Проверяем, соответствует ли группа формату
-		if !GroupRegex.MatchString(text) {
-			return c.Send("Неверный формат группы. Группа должна быть от Н1 до Н6 (или H1 до H6).")
-		}
-
-		// Нормализуем группу
-		normalizedGroup, _ := NormalizeGroupName(text)
-
-		// Сохраняем группу
-		state.Params["group"] = normalizedGroup
-
-		// Генерируем QR-код
-		return ab.generateCodeFromParams(c, state.Params)
-
 	case "add_admin_id":
-		// Пользователь вводит ID администратора
 		_, err := strconv.ParseInt(text, 10, 64)
 		if err != nil {
 			return c.Send("Неверный формат ID пользователя. Пожалуйста, введите целое число.")
 		}
 
-		// Сохраняем ID администратора
 		state.Params["admin_id"] = text
-
-		// Переходим к следующему шагу - ввод имени администратора
 		state.State = "add_admin_name"
 
-		// Создаем клавиатуру с кнопкой "Без имени"
 		keyboard := &tele.ReplyMarkup{ResizeKeyboard: true}
 		btnNoName := keyboard.Text("🚫 Без имени")
 		btnCancel := keyboard.Text("❌ Отмена")
@@ -331,104 +195,34 @@ func (ab *AdminBot) handleText(c tele.Context) error {
 			keyboard.Row(btnCancel),
 		)
 
-		// Отправляем сообщение с запросом имени администратора
 		return c.Send("Введите имя администратора (для заметок) или нажмите кнопку 'Без имени':", keyboard)
 
 	case "add_admin_name":
-		// Пользователь вводит имя администратора
-		// Сохраняем имя администратора
 		state.Params["admin_name"] = text
-
-		// Добавляем администратора
 		return ab.addAdminFromParams(c, state.Params)
 
 	case "user_by_group":
-		// Пользователь вводит группу для фильтрации пользователей
-		// Проверяем, соответствует ли группа формату
 		if !GroupRegex.MatchString(text) {
 			return c.Send("Неверный формат группы. Группа должна быть от Н1 до Н6 (или H1 до H6).")
 		}
 
-		// Нормализуем группу
 		normalizedGroup, _ := NormalizeGroupName(text)
 		ab.logger.Infof("Пользователь %d выбрал группу %s для фильтрации", c.Sender().ID, normalizedGroup)
 
-		// Сбрасываем состояние пользователя
 		delete(ab.states, userID)
 
-		// Получаем всех пользователей через API
-		usersData, err := ab.apiClient.Get("/users", nil)
-		if err != nil {
-			ab.logger.Errorf("Ошибка получения пользователей через API: %v", err)
-			return c.Send("Произошла ошибка при получении пользователей. Пожалуйста, попробуйте позже.")
+		return ab.showUsersByGroup(c, normalizedGroup)
+
+	case "complete_puzzle_id":
+		puzzleId, err := strconv.Atoi(text)
+		if err != nil || puzzleId < 1 || puzzleId > 30 {
+			return c.Send("Неверный номер пазла. Введите число от 1 до 30.")
 		}
 
-		// Декодируем ответ
-		var usersResponse struct {
-			Total int            `json:"total"`
-			Users []*models.User `json:"users"`
-		}
-		if err := json.Unmarshal(usersData, &usersResponse); err != nil {
-			ab.logger.Errorf("Ошибка декодирования ответа API: %v", err)
-			return c.Send("Произошла ошибка при получении пользователей. Пожалуйста, попробуйте позже.")
-		}
-
-		// Фильтруем пользователей по группе и исключаем удаленных
-		var filteredUsers []*models.User
-		for _, user := range usersResponse.Users {
-			if user.Group == normalizedGroup && !user.Deleted {
-				filteredUsers = append(filteredUsers, user)
-			}
-		}
-
-		if len(filteredUsers) == 0 {
-			return c.Send(fmt.Sprintf("Пользователи в группе %s не найдены.", normalizedGroup))
-		}
-
-		// Формируем сообщение со списком пользователей
-		var message strings.Builder
-		message.WriteString(fmt.Sprintf("Список пользователей в группе %s:\n\n", normalizedGroup))
-
-		for i, user := range filteredUsers {
-			message.WriteString(fmt.Sprintf("%d. %s %s (Баллы: %d)\n",
-				i+1, user.FirstName, user.LastName, user.Points))
-		}
-
-		// Отправляем сообщение
-		return c.Send(message.String())
-
-	case "add_points_user_id":
-		// Пользователь вводит ID пользователя
-		_, err := uuid.Parse(text)
-		if err != nil {
-			return c.Send("Неверный формат ID пользователя. Пожалуйста, введите UUID.")
-		}
-
-		// Сохраняем ID пользователя
-		state.Params["user_id"] = text
-
-		// Переходим к следующему шагу - ввод количества баллов
-		state.State = "add_points_amount"
-
-		// Отправляем сообщение с запросом количества баллов
-		return c.Send("Введите количество баллов для добавления:")
-
-	case "add_points_amount":
-		// Пользователь вводит количество баллов
-		_, err := strconv.Atoi(text)
-		if err != nil {
-			return c.Send("Неверный формат количества баллов. Пожалуйста, введите целое число.")
-		}
-
-		// Сохраняем количество баллов
-		state.Params["points"] = text
-
-		// Добавляем баллы пользователю
-		c.Message().Payload = state.Params["user_id"] + " " + state.Params["points"]
-		return ab.handleAddPoints(c)
+		delete(ab.states, userID)
+		return ab.completePuzzleAndNotify(c, puzzleId)
 
 	default:
-		// Неизвестное состояние, сбрасываем его
 		delete(ab.states, userID)
 		keyboard := ab.createMainKeyboard()
 		return c.Send("Используйте кнопки для навигации или /help для просмотра доступных команд.", keyboard)
@@ -437,90 +231,24 @@ func (ab *AdminBot) handleText(c tele.Context) error {
 
 // handleNoLimitsButton обрабатывает нажатие на кнопку "Без ограничений"
 func (ab *AdminBot) handleNoLimitsButton(c tele.Context) error {
-	// Проверяем, является ли пользователь администратором
 	if !ab.isAdmin(c.Sender().ID) {
 		return c.Send("У вас нет доступа к этой функции.")
 	}
 
-	// Получаем ID пользователя
 	userID := c.Sender().ID
 
-	// Проверяем, есть ли у пользователя активное состояние
 	state, ok := ab.states[userID]
 	if !ok {
-		// Если нет активного состояния, отправляем справку
 		keyboard := ab.createMainKeyboard()
 		return c.Send("Используйте кнопки для навигации или /help для просмотра доступных команд.", keyboard)
 	}
 
-	// Обрабатываем нажатие в зависимости от текущего состояния
 	switch state.State {
-	case "generate_code_per_user":
-		// Пользователь выбрал "Без ограничений" для ограничения на пользователя
-		// Устанавливаем значение 0 (без ограничений)
-		state.Params["per_user"] = "0"
-
-		// Переходим к следующему шагу - ввод общего ограничения
-		state.State = "generate_code_total"
-
-		// Создаем клавиатуру с кнопкой "Без ограничений"
-		keyboard := &tele.ReplyMarkup{ResizeKeyboard: true}
-		btnNoLimits := keyboard.Text("🚫 Без ограничений")
-		btnCancel := keyboard.Text("❌ Отмена")
-		keyboard.Reply(
-			keyboard.Row(btnNoLimits),
-			keyboard.Row(btnCancel),
-		)
-
-		// Отправляем сообщение с запросом общего ограничения
-		return c.Send("Введите общее количество использований или нажмите кнопку 'Без ограничений':", keyboard)
-
-	case "generate_code_total":
-		// Пользователь выбрал "Без ограничений" для общего ограничения
-		// Устанавливаем значение 0 (без ограничений)
-		state.Params["total"] = "0"
-
-		// Переходим к следующему шагу - ввод группы
-		state.State = "generate_code_group"
-
-		// Создаем клавиатуру с кнопками групп
-		keyboard := &tele.ReplyMarkup{ResizeKeyboard: true}
-		btnN1 := keyboard.Text("Н1")
-		btnN2 := keyboard.Text("Н2")
-		btnN3 := keyboard.Text("Н3")
-		btnN4 := keyboard.Text("Н4")
-		btnN5 := keyboard.Text("Н5")
-		btnN6 := keyboard.Text("Н6")
-		btnNoLimits := keyboard.Text("🚫 Без ограничений")
-		btnCancel := keyboard.Text("❌ Отмена")
-		keyboard.Reply(
-			keyboard.Row(btnN1, btnN2, btnN3),
-			keyboard.Row(btnN4, btnN5, btnN6),
-			keyboard.Row(btnNoLimits),
-			keyboard.Row(btnCancel),
-		)
-
-		// Отправляем сообщение с запросом группы
-		return c.Send("Выберите группу или нажмите кнопку 'Без ограничений':", keyboard)
-
-	case "generate_code_group":
-		// Пользователь выбрал "Без ограничений" для группы
-		// Устанавливаем пустую строку (без ограничений по группе)
-		state.Params["group"] = ""
-
-		// Генерируем QR-код
-		return ab.generateCodeFromParams(c, state.Params)
-
 	case "add_admin_name":
-		// Пользователь выбрал "Без имени" для имени администратора
-		// Устанавливаем пустую строку (без имени)
 		state.Params["admin_name"] = ""
-
-		// Добавляем администратора
 		return ab.addAdminFromParams(c, state.Params)
 
 	default:
-		// Неизвестное состояние, сбрасываем его
 		delete(ab.states, userID)
 		keyboard := ab.createMainKeyboard()
 		return c.Send("Используйте кнопки для навигации или /help для просмотра доступных команд.", keyboard)
@@ -529,94 +257,34 @@ func (ab *AdminBot) handleNoLimitsButton(c tele.Context) error {
 
 // handleGroupButton обрабатывает нажатие на кнопку группы
 func (ab *AdminBot) handleGroupButton(c tele.Context) error {
-	// Проверяем, является ли пользователь администратором
 	if !ab.isAdmin(c.Sender().ID) {
 		return c.Send("У вас нет доступа к этой функции.")
 	}
 
-	// Получаем ID пользователя
 	userID := c.Sender().ID
 
-	// Проверяем, есть ли у пользователя активное состояние
 	state, ok := ab.states[userID]
 	if !ok {
-		// Если нет активного состояния, отправляем справку
 		keyboard := ab.createMainKeyboard()
 		return c.Send("Используйте кнопки для навигации или /help для просмотра доступных команд.", keyboard)
 	}
 
-	// Получаем выбранную группу
 	group := c.Text()
-
-	// Нормализуем группу
 	normalizedGroup, valid := NormalizeGroupName(group)
 	if !valid {
 		return c.Send("Неверный формат группы. Группа должна быть от Н1 до Н6 (или H1 до H6).")
 	}
 
-	// Обрабатываем нажатие в зависимости от текущего состояния
 	switch state.State {
-	case "generate_code_group":
-		// Сохраняем группу
-		state.Params["group"] = normalizedGroup
-
-		// Генерируем QR-код
-		return ab.generateCodeFromParams(c, state.Params)
-
 	case "broadcast_group":
-		// Рассылка пользователям выбранной группы
 		return ab.broadcastMessage(c, state.Params["text"], normalizedGroup)
 
 	case "user_by_group":
-		// Фильтрация пользователей по группе
 		ab.logger.Infof("Пользователь %d выбрал группу %s для фильтрации", c.Sender().ID, normalizedGroup)
-
-		// Сбрасываем состояние пользователя
 		delete(ab.states, userID)
-
-		// Получаем всех пользователей через API
-		usersData, err := ab.apiClient.Get("/users", nil)
-		if err != nil {
-			ab.logger.Errorf("Ошибка получения пользователей через API: %v", err)
-			return c.Send("Произошла ошибка при получении пользователей. Пожалуйста, попробуйте позже.")
-		}
-
-		// Декодируем ответ
-		var usersResponse struct {
-			Total int            `json:"total"`
-			Users []*models.User `json:"users"`
-		}
-		if err := json.Unmarshal(usersData, &usersResponse); err != nil {
-			ab.logger.Errorf("Ошибка декодирования ответа API: %v", err)
-			return c.Send("Произошла ошибка при получении пользователей. Пожалуйста, попробуйте позже.")
-		}
-
-		// Фильтруем пользователей по группе и исключаем удаленных
-		var filteredUsers []*models.User
-		for _, user := range usersResponse.Users {
-			if user.Group == normalizedGroup && !user.Deleted {
-				filteredUsers = append(filteredUsers, user)
-			}
-		}
-
-		if len(filteredUsers) == 0 {
-			return c.Send(fmt.Sprintf("Пользователи в группе %s не найдены.", normalizedGroup))
-		}
-
-		// Формируем сообщение со списком пользователей
-		var message strings.Builder
-		message.WriteString(fmt.Sprintf("Список пользователей в группе %s:\n\n", normalizedGroup))
-
-		for i, user := range filteredUsers {
-			message.WriteString(fmt.Sprintf("%d. %s %s (Баллы: %d)\n",
-				i+1, user.FirstName, user.LastName, user.Points))
-		}
-
-		// Отправляем сообщение
-		return c.Send(message.String())
+		return ab.showUsersByGroup(c, normalizedGroup)
 
 	default:
-		// Неизвестное состояние, сбрасываем его
 		delete(ab.states, userID)
 		keyboard := ab.createMainKeyboard()
 		return c.Send("Используйте кнопки для навигации или /help для просмотра доступных команд.", keyboard)
@@ -625,219 +293,83 @@ func (ab *AdminBot) handleGroupButton(c tele.Context) error {
 
 // handleCancelButton обрабатывает нажатие на кнопку "Отмена"
 func (ab *AdminBot) handleCancelButton(c tele.Context) error {
-	// Проверяем, является ли пользователь администратором
 	if !ab.isAdmin(c.Sender().ID) {
 		return c.Send("У вас нет доступа к этой функции.")
 	}
 
-	// Получаем ID пользователя
 	userID := c.Sender().ID
-
-	// Сбрасываем состояние пользователя
 	delete(ab.states, userID)
 
-	// Создаем основную клавиатуру
 	keyboard := ab.createMainKeyboard()
-
-	// Отправляем сообщение с клавиатурой
 	return c.Send("Операция отменена. Выберите действие:", keyboard)
-}
-
-// generateCodeFromParams генерирует QR-код из параметров
-func (ab *AdminBot) generateCodeFromParams(c tele.Context, params map[string]string) error {
-	// Парсим параметры
-	amount, err := strconv.Atoi(params["amount"])
-	if err != nil {
-		return c.Send("Неверный формат количества баллов.")
-	}
-
-	perUser, err := strconv.Atoi(params["per_user"])
-	if err != nil {
-		return c.Send("Неверный формат ограничения на пользователя.")
-	}
-
-	total, err := strconv.Atoi(params["total"])
-	if err != nil {
-		return c.Send("Неверный формат общего ограничения.")
-	}
-
-	group := params["group"]
-
-	// Создаем запрос для API
-	codeRequest := map[string]interface{}{
-		"amount":   amount,
-		"per_user": perUser,
-		"total":    total,
-		"group":    group,
-	}
-
-	// Отправляем запрос на создание кода через API
-	codeData, err := ab.apiClient.Post("/codes", codeRequest)
-	if err != nil {
-		ab.logger.Errorf("Ошибка создания кода через API: %v", err)
-		return c.Send("Произошла ошибка при генерации QR-кода. Пожалуйста, попробуйте позже.")
-	}
-
-	// Декодируем ответ
-	var code models.Code
-	if err := json.Unmarshal(codeData, &code); err != nil {
-		ab.logger.Errorf("Ошибка декодирования ответа API: %v", err)
-		return c.Send("Произошла ошибка при генерации QR-кода. Пожалуйста, попробуйте позже.")
-	}
-
-	// Формируем сообщение с информацией о коде
-	message := fmt.Sprintf("QR-код успешно сгенерирован!\n\n"+
-		"Код: %s\n"+
-		"Баллы: %d\n"+
-		"Ограничение на пользователя: %d\n"+
-		"Общее ограничение: %d\n"+
-		"Группа: %s\n\n"+
-		"Пользователи могут применить этот код, отправив его текстом боту.",
-		code.Code, code.Amount, code.PerUser, code.Total, code.Group)
-
-	// Сбрасываем состояние пользователя
-	delete(ab.states, c.Sender().ID)
-
-	// Создаем основную клавиатуру
-	keyboard := ab.createMainKeyboard()
-
-	// Генерируем QR-код в виде изображения
-	qrCodeContent := code.Code.String()
-	qrCodeImage, err := GenerateQRCode(qrCodeContent, 300)
-	if err != nil {
-		ab.logger.Errorf("Ошибка генерации QR-кода: %v", err)
-		// Отправляем сообщение с информацией о коде без изображения
-		return c.Send(message, keyboard)
-	}
-
-	// Создаем объект фото для отправки
-	photo := &tele.Photo{
-		File: tele.File{
-			FileReader: bytes.NewReader(qrCodeImage),
-		},
-		Caption: message,
-	}
-
-	// Отправляем фото с QR-кодом и информацией
-	_, err = c.Bot().Send(c.Recipient(), photo, keyboard)
-	if err != nil {
-		ab.logger.Errorf("Ошибка отправки QR-кода: %v", err)
-		// В случае ошибки отправляем обычное сообщение
-		return c.Send(message, keyboard)
-	}
-
-	return nil
 }
 
 // addAdminFromParams добавляет администратора из параметров
 func (ab *AdminBot) addAdminFromParams(c tele.Context, params map[string]string) error {
-	// Парсим ID администратора
 	adminID, err := strconv.ParseInt(params["admin_id"], 10, 64)
 	if err != nil {
 		return c.Send("Неверный формат ID пользователя.")
 	}
 
-	// Получаем имя администратора
 	adminName := params["admin_name"]
 
-	// Проверяем, есть ли уже такой администратор
-	for _, admin := range ab.admins.Admins {
-		if admin.ID == adminID {
-			return c.Send(fmt.Sprintf("Пользователь с ID %d уже является администратором.", adminID))
-		}
+	// Проверяем, не является ли уже администратором
+	if ab.isAdmin(adminID) {
+		return c.Send(fmt.Sprintf("Пользователь с ID %d уже является администратором.", adminID))
 	}
 
-	// Создаем запрос для API
-	adminRequest := map[string]interface{}{
-		"id":       adminID,
-		"name":     adminName,
-		"username": "",
-	}
-
-	// Отправляем запрос на добавление администратора через API
-	_, err = ab.apiClient.Post("/api/admin/admins/add", adminRequest)
+	// Добавляем через API
+	err = ab.addAdminViaAPI(adminID, adminName)
 	if err != nil {
 		ab.logger.Errorf("Ошибка добавления администратора через API: %v", err)
 		return c.Send(fmt.Sprintf("Ошибка добавления администратора: %v", err))
 	}
 
-	// Добавляем нового администратора в локальный список
-	ab.admins.Admins = append(ab.admins.Admins, AdminInfo{
-		ID:   adminID,
-		Name: adminName,
-	})
-
-	// Сохраняем список администраторов
-	if err := ab.saveAdmins(); err != nil {
-		ab.logger.Errorf("Ошибка сохранения списка администраторов: %v", err)
-		return c.Send("Произошла ошибка при сохранении списка администраторов.")
-	}
-
-	// Сбрасываем состояние пользователя
 	delete(ab.states, c.Sender().ID)
-
-	// Создаем основную клавиатуру
 	keyboard := ab.createMainKeyboard()
 
-	// Отправляем сообщение об успешном добавлении
 	return c.Send(fmt.Sprintf("Пользователь с ID %d успешно добавлен в список администраторов.", adminID), keyboard)
 }
-
-// Используем NormalizeGroupName из utils.go
 
 // handleUsersButton обрабатывает нажатие на кнопку "Пользователи"
 func (ab *AdminBot) handleUsersButton(c tele.Context) error {
 	ab.logger.Infof("Пользователь %d нажал на кнопку 'Пользователи'", c.Sender().ID)
 
-	// Проверяем, является ли пользователь администратором
 	if !ab.isAdmin(c.Sender().ID) {
 		return c.Send("У вас нет доступа к этой функции.")
 	}
 
-	// Создаем клавиатуру для работы с пользователями
 	keyboard := ab.createUsersKeyboard()
-
-	// Отправляем сообщение с клавиатурой
 	return c.Send("Выберите действие для работы с пользователями:", keyboard)
 }
 
-// handleCodesButton обрабатывает нажатие на кнопку "QR-коды"
-func (ab *AdminBot) handleCodesButton(c tele.Context) error {
-	ab.logger.Infof("Пользователь %d нажал на кнопку 'QR-коды'", c.Sender().ID)
+// handlePuzzlesButton обрабатывает нажатие на кнопку "Пазлы"
+func (ab *AdminBot) handlePuzzlesButton(c tele.Context) error {
+	ab.logger.Infof("Пользователь %d нажал на кнопку 'Пазлы'", c.Sender().ID)
 
-	// Проверяем, является ли пользователь администратором
 	if !ab.isAdmin(c.Sender().ID) {
 		return c.Send("У вас нет доступа к этой функции.")
 	}
 
-	// Создаем клавиатуру для работы с QR-кодами
-	keyboard := ab.createCodesKeyboard()
-
-	// Отправляем сообщение с клавиатурой
-	return c.Send("Выберите действие для работы с QR-кодами:", keyboard)
+	keyboard := ab.createPuzzlesKeyboard()
+	return c.Send("Выберите действие для работы с пазлами:", keyboard)
 }
 
 // handleAdminsButton обрабатывает нажатие на кнопку "Администраторы"
 func (ab *AdminBot) handleAdminsButton(c tele.Context) error {
 	ab.logger.Infof("Пользователь %d нажал на кнопку 'Администраторы'", c.Sender().ID)
 
-	// Проверяем, является ли пользователь администратором
 	if !ab.isAdmin(c.Sender().ID) {
 		return c.Send("У вас нет доступа к этой функции.")
 	}
 
-	// Создаем клавиатуру для работы с администраторами
 	keyboard := ab.createAdminsKeyboard()
-
-	// Отправляем сообщение с клавиатурой
 	return c.Send("Выберите действие для работы с администраторами:", keyboard)
 }
 
 // handleAllUsersButton обрабатывает нажатие на кнопку "Все пользователи"
 func (ab *AdminBot) handleAllUsersButton(c tele.Context) error {
 	ab.logger.Infof("Пользователь %d нажал на кнопку 'Все пользователи'", c.Sender().ID)
-
-	// Вызываем обработчик команды /users без параметров
 	return ab.handleUsers(c)
 }
 
@@ -845,19 +377,16 @@ func (ab *AdminBot) handleAllUsersButton(c tele.Context) error {
 func (ab *AdminBot) handleUsersByGroupButton(c tele.Context) error {
 	ab.logger.Infof("Пользователь %d нажал на кнопку 'По группам'", c.Sender().ID)
 
-	// Проверяем, является ли пользователь администратором
 	if !ab.isAdmin(c.Sender().ID) {
 		return c.Send("У вас нет доступа к этой функции.")
 	}
 
-	// Инициализируем состояние для выбора группы
 	userID := c.Sender().ID
 	ab.states[userID] = &BotState{
 		State:  "user_by_group",
 		Params: make(map[string]string),
 	}
 
-	// Создаем клавиатуру с кнопками групп
 	keyboard := &tele.ReplyMarkup{ResizeKeyboard: true}
 	btnN1 := keyboard.Text("Н1")
 	btnN2 := keyboard.Text("Н2")
@@ -872,83 +401,74 @@ func (ab *AdminBot) handleUsersByGroupButton(c tele.Context) error {
 		keyboard.Row(btnCancel),
 	)
 
-	// Отправляем сообщение с запросом группы
 	return c.Send("Выберите группу для фильтрации пользователей:", keyboard)
 }
 
-// handleAddPointsButton обрабатывает нажатие на кнопку "Добавить баллы"
-func (ab *AdminBot) handleAddPointsButton(c tele.Context) error {
-	ab.logger.Infof("Пользователь %d нажал на кнопку 'Добавить баллы'", c.Sender().ID)
-
-	// Проверяем, является ли пользователь администратором
-	if !ab.isAdmin(c.Sender().ID) {
-		return c.Send("У вас нет доступа к этой функции.")
-	}
-
-	// Инициализируем состояние для добавления баллов
-	userID := c.Sender().ID
-	ab.states[userID] = &BotState{
-		State:  "add_points_user_id",
-		Params: make(map[string]string),
-	}
-
-	// Отправляем сообщение с запросом ID пользователя
-	return c.Send("Введите ID пользователя (UUID):")
+// handleListPuzzlesButton обрабатывает нажатие на кнопку "Список пазлов"
+func (ab *AdminBot) handleListPuzzlesButton(c tele.Context) error {
+	ab.logger.Infof("Пользователь %d нажал на кнопку 'Список пазлов'", c.Sender().ID)
+	return ab.handlePuzzles(c)
 }
 
-// handleGenerateCodeButton обрабатывает нажатие на кнопку "Сгенерировать QR-код"
-func (ab *AdminBot) handleGenerateCodeButton(c tele.Context) error {
-	ab.logger.Infof("Пользователь %d нажал на кнопку 'Сгенерировать QR-код'", c.Sender().ID)
+// handleListPiecesButton обрабатывает нажатие на кнопку "Список деталей"
+func (ab *AdminBot) handleListPiecesButton(c tele.Context) error {
+	ab.logger.Infof("Пользователь %d нажал на кнопку 'Список деталей'", c.Sender().ID)
+	return ab.handlePiecesCommand(c)
+}
 
-	// Проверяем, является ли пользователь администратором
+// handleCompletePuzzleButton обрабатывает нажатие на кнопку "Засчитать пазл"
+func (ab *AdminBot) handleCompletePuzzleButton(c tele.Context) error {
+	ab.logger.Infof("Пользователь %d нажал на кнопку 'Засчитать пазл'", c.Sender().ID)
+
 	if !ab.isAdmin(c.Sender().ID) {
 		return c.Send("У вас нет доступа к этой функции.")
 	}
 
-	// Инициализируем состояние для генерации QR-кода
 	userID := c.Sender().ID
 	ab.states[userID] = &BotState{
-		State:  "generate_code_amount",
+		State:  "complete_puzzle_id",
 		Params: make(map[string]string),
 	}
 
-	// Отправляем сообщение с запросом количества баллов
-	return c.Send("Введите количество баллов для QR-кода:")
+	keyboard := &tele.ReplyMarkup{ResizeKeyboard: true}
+	btnCancel := keyboard.Text("❌ Отмена")
+	keyboard.Reply(keyboard.Row(btnCancel))
+
+	return c.Send("Введите номер пазла для засчитывания (1-30):", keyboard)
 }
 
 // handleAddAdminButton обрабатывает нажатие на кнопку "Добавить администратора"
 func (ab *AdminBot) handleAddAdminButton(c tele.Context) error {
 	ab.logger.Infof("Пользователь %d нажал на кнопку 'Добавить администратора'", c.Sender().ID)
 
-	// Проверяем, является ли пользователь администратором
 	if !ab.isAdmin(c.Sender().ID) {
 		return c.Send("У вас нет доступа к этой функции.")
 	}
 
-	// Инициализируем состояние для добавления администратора
 	userID := c.Sender().ID
 	ab.states[userID] = &BotState{
 		State:  "add_admin_id",
 		Params: make(map[string]string),
 	}
 
-	// Отправляем сообщение с запросом ID администратора
 	return c.Send("Введите ID пользователя:")
+}
+
+// handleLotteryButton обрабатывает нажатие на кнопку "Розыгрыш"
+func (ab *AdminBot) handleLotteryButton(c tele.Context) error {
+	ab.logger.Infof("Пользователь %d нажал на кнопку 'Розыгрыш'", c.Sender().ID)
+	return ab.handleLottery(c)
 }
 
 // handleBackButton обрабатывает нажатие на кнопку "Назад"
 func (ab *AdminBot) handleBackButton(c tele.Context) error {
 	ab.logger.Infof("Пользователь %d нажал на кнопку 'Назад'", c.Sender().ID)
 
-	// Проверяем, является ли пользователь администратором
 	if !ab.isAdmin(c.Sender().ID) {
 		return c.Send("У вас нет доступа к этой функции.")
 	}
 
-	// Создаем основную клавиатуру
 	keyboard := ab.createMainKeyboard()
-
-	// Отправляем сообщение с клавиатурой
 	return c.Send("Главное меню:", keyboard)
 }
 
@@ -959,119 +479,73 @@ func (ab *AdminBot) Stop() error {
 	return nil
 }
 
-// loadAdmins загружает список администраторов из файла
-func (ab *AdminBot) loadAdmins() error {
-	// Проверяем, существует ли файл
-	if _, err := os.Stat(ab.adminsPath); os.IsNotExist(err) {
-		// Если файл не существует, но директория существует, создаем пустой файл
-		dir := filepath.Dir(ab.adminsPath)
-		if _, err := os.Stat(dir); err == nil {
-			// Создаем пустой список администраторов
-			emptyAdmins := AdminsList{
-				Admins: []AdminInfo{},
-			}
-			data, err := json.MarshalIndent(emptyAdmins, "", "    ")
-			if err != nil {
-				return err
-			}
-			if err := os.WriteFile(ab.adminsPath, data, 0644); err != nil {
-				return err
-			}
-			ab.admins = emptyAdmins
-			return nil
-		}
-		return err
-	}
-
-	// Читаем файл
-	data, err := os.ReadFile(ab.adminsPath)
-	if err != nil {
-		return err
-	}
-
-	// Декодируем JSON
-	if err := json.Unmarshal(data, &ab.admins); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-// saveAdmins сохраняет список администраторов в файл
-func (ab *AdminBot) saveAdmins() error {
-	// Кодируем JSON
-	data, err := json.MarshalIndent(ab.admins, "", "    ")
-	if err != nil {
-		return err
-	}
-
-	// Создаем директорию, если она не существует
-	dir := filepath.Dir(ab.adminsPath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return err
-	}
-
-	// Записываем файл
-	if err := os.WriteFile(ab.adminsPath, data, 0644); err != nil {
-		return err
-	}
-
-	return nil
-}
-
 // isAdmin проверяет, является ли пользователь администратором
 func (ab *AdminBot) isAdmin(userID int64) bool {
-	// Проверяем через API, является ли пользователь администратором
 	data, err := ab.apiClient.Get(fmt.Sprintf("/admins/check/%d", userID), nil)
 	if err != nil {
 		ab.logger.Errorf("Ошибка проверки администратора через API: %v", err)
-
-		// Если API недоступен, используем локальный список администраторов
-		for _, admin := range ab.admins.Admins {
-			if userID == admin.ID {
-				return true
-			}
-		}
-
 		return false
 	}
 
-	// Декодируем ответ
 	var response struct {
 		IsAdmin bool `json:"is_admin"`
 	}
 	if err := json.Unmarshal(data, &response); err != nil {
 		ab.logger.Errorf("Ошибка декодирования ответа API: %v", err)
-
-		// Если не удалось декодировать ответ, используем локальный список администраторов
-		for _, admin := range ab.admins.Admins {
-			if userID == admin.ID {
-				return true
-			}
-		}
-
 		return false
 	}
 
 	return response.IsAdmin
 }
 
+// addAdminViaAPI добавляет администратора через API
+func (ab *AdminBot) addAdminViaAPI(adminID int64, name string) error {
+	reqData := map[string]interface{}{
+		"id":   adminID,
+		"name": name,
+	}
+	_, err := ab.apiClient.Post("/admins", reqData)
+	return err
+}
+
+// getAdminsViaAPI получает список администраторов через API
+func (ab *AdminBot) getAdminsViaAPI() ([]AdminInfo, error) {
+	data, err := ab.apiClient.Get("/admins", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var response struct {
+		Admins []AdminInfo `json:"admins"`
+	}
+	if err := json.Unmarshal(data, &response); err != nil {
+		return nil, err
+	}
+
+	return response.Admins, nil
+}
+
+// deleteAdminViaAPI удаляет администратора через API
+func (ab *AdminBot) deleteAdminViaAPI(adminID int64) error {
+	_, err := ab.apiClient.Delete(fmt.Sprintf("/admins/%d", adminID))
+	return err
+}
+
 // createMainKeyboard создает основную клавиатуру с кнопками
 func (ab *AdminBot) createMainKeyboard() *tele.ReplyMarkup {
 	keyboard := &tele.ReplyMarkup{ResizeKeyboard: true}
 
-	// Создаем кнопки
 	btnUsers := keyboard.Text("👥 Пользователи")
-	btnCodes := keyboard.Text("🔑 QR-коды")
+	btnPuzzles := keyboard.Text("🧩 Пазлы")
 	btnAdmins := keyboard.Text("👮 Администраторы")
 	btnBroadcast := keyboard.Text("📣 Рассылка")
+	btnLottery := keyboard.Text("🎲 Розыгрыш")
 	btnHelp := keyboard.Text("❓ Помощь")
 
-	// Добавляем кнопки на клавиатуру
 	keyboard.Reply(
-		keyboard.Row(btnUsers, btnCodes),
-		keyboard.Row(btnAdmins, btnBroadcast),
-		keyboard.Row(btnHelp),
+		keyboard.Row(btnUsers, btnPuzzles),
+		keyboard.Row(btnAdmins, btnLottery),
+		keyboard.Row(btnBroadcast, btnHelp),
 	)
 
 	return keyboard
@@ -1081,35 +555,31 @@ func (ab *AdminBot) createMainKeyboard() *tele.ReplyMarkup {
 func (ab *AdminBot) createUsersKeyboard() *tele.ReplyMarkup {
 	keyboard := &tele.ReplyMarkup{ResizeKeyboard: true}
 
-	// Создаем кнопки
 	btnAllUsers := keyboard.Text("👥 Все пользователи")
 	btnUsersByGroup := keyboard.Text("👨‍👩‍👧‍👦 По группам")
-	btnAddPoints := keyboard.Text("➕ Добавить баллы")
 	btnBack := keyboard.Text("🔙 Назад")
 
-	// Добавляем кнопки на клавиатуру
 	keyboard.Reply(
 		keyboard.Row(btnAllUsers, btnUsersByGroup),
-		keyboard.Row(btnAddPoints),
 		keyboard.Row(btnBack),
 	)
 
 	return keyboard
 }
 
-// createCodesKeyboard создает клавиатуру для работы с QR-кодами
-func (ab *AdminBot) createCodesKeyboard() *tele.ReplyMarkup {
+// createPuzzlesKeyboard создает клавиатуру для работы с пазлами
+func (ab *AdminBot) createPuzzlesKeyboard() *tele.ReplyMarkup {
 	keyboard := &tele.ReplyMarkup{ResizeKeyboard: true}
 
-	// Создаем кнопки
-	btnListCodes := keyboard.Text("🔑 Список QR-кодов")
-	btnGenerateCode := keyboard.Text("➕ Сгенерировать QR-код")
+	btnListPuzzles := keyboard.Text("🧩 Список пазлов")
+	btnListPieces := keyboard.Text("📋 Список деталей")
+	btnCompletePuzzle := keyboard.Text("✅ Засчитать пазл")
 	btnBack := keyboard.Text("🔙 Назад")
 
-	// Добавляем кнопки на клавиатуру
 	keyboard.Reply(
-		keyboard.Row(btnListCodes),
-		keyboard.Row(btnGenerateCode),
+		keyboard.Row(btnListPuzzles),
+		keyboard.Row(btnListPieces),
+		keyboard.Row(btnCompletePuzzle),
 		keyboard.Row(btnBack),
 	)
 
@@ -1120,12 +590,10 @@ func (ab *AdminBot) createCodesKeyboard() *tele.ReplyMarkup {
 func (ab *AdminBot) createAdminsKeyboard() *tele.ReplyMarkup {
 	keyboard := &tele.ReplyMarkup{ResizeKeyboard: true}
 
-	// Создаем кнопки
 	btnListAdmins := keyboard.Text("👮 Список администраторов")
 	btnAddAdmin := keyboard.Text("➕ Добавить администратора")
 	btnBack := keyboard.Text("🔙 Назад")
 
-	// Добавляем кнопки на клавиатуру
 	keyboard.Reply(
 		keyboard.Row(btnListAdmins),
 		keyboard.Row(btnAddAdmin),
@@ -1139,32 +607,25 @@ func (ab *AdminBot) createAdminsKeyboard() *tele.ReplyMarkup {
 func (ab *AdminBot) handleStart(c tele.Context) error {
 	ab.logger.Infof("Пользователь %d запустил бота", c.Sender().ID)
 
-	// Проверяем, является ли пользователь администратором
 	if !ab.isAdmin(c.Sender().ID) {
 		return c.Send("У вас нет доступа к этому боту.")
 	}
 
-	// Создаем клавиатуру
 	keyboard := ab.createMainKeyboard()
-
-	// Отправляем приветственное сообщение с клавиатурой
-	return c.Send("Привет, администратор! Я бот для управления системой лояльности. Выберите действие на клавиатуре или используйте /help для просмотра доступных команд.", keyboard)
+	return c.Send("Привет, администратор! Я бот для управления системой пазлов. Выберите действие на клавиатуре или используйте /help для просмотра доступных команд.", keyboard)
 }
 
 // handleUsers обрабатывает команду /users
 func (ab *AdminBot) handleUsers(c tele.Context) error {
 	ab.logger.Infof("Пользователь %d запросил список пользователей", c.Sender().ID)
 
-	// Проверяем, является ли пользователь администратором
 	if !ab.isAdmin(c.Sender().ID) {
 		return c.Send("У вас нет доступа к этой команде.")
 	}
 
-	// Получаем параметры команды
 	args := strings.Fields(c.Message().Payload)
 	var group string
 	if len(args) > 0 {
-		// Нормализуем группу, если она указана
 		normalizedGroup, valid := NormalizeGroupName(args[0])
 		if !valid {
 			return c.Send("Неверный формат группы. Группа должна быть от Н1 до Н6 (или H1 до H6).")
@@ -1173,14 +634,12 @@ func (ab *AdminBot) handleUsers(c tele.Context) error {
 		ab.logger.Infof("Фильтрация пользователей по группе: %s", group)
 	}
 
-	// Получаем всех пользователей через API
 	usersData, err := ab.apiClient.Get("/users", nil)
 	if err != nil {
 		ab.logger.Errorf("Ошибка получения пользователей через API: %v", err)
 		return c.Send("Произошла ошибка при получении пользователей. Пожалуйста, попробуйте позже.")
 	}
 
-	// Декодируем ответ
 	var usersResponse struct {
 		Total int            `json:"total"`
 		Users []*models.User `json:"users"`
@@ -1190,7 +649,6 @@ func (ab *AdminBot) handleUsers(c tele.Context) error {
 		return c.Send("Произошла ошибка при получении пользователей. Пожалуйста, попробуйте позже.")
 	}
 
-	// Фильтруем пользователей по группе и исключаем удаленных
 	var filteredUsers []*models.User
 	for _, user := range usersResponse.Users {
 		if (group == "" || user.Group == group) && !user.Deleted {
@@ -1206,7 +664,6 @@ func (ab *AdminBot) handleUsers(c tele.Context) error {
 		}
 	}
 
-	// Формируем сообщение со списком пользователей
 	var message strings.Builder
 	if group == "" {
 		message.WriteString("Список всех пользователей:\n\n")
@@ -1215,11 +672,11 @@ func (ab *AdminBot) handleUsers(c tele.Context) error {
 	}
 
 	for i, user := range filteredUsers {
-		message.WriteString(fmt.Sprintf("%d. %s %s (Группа: %s, Баллы: %d)\n",
-			i+1, user.FirstName, user.LastName, user.Group, user.Points))
+		pieceCount, _ := ab.getUserPieceCount(user.Id.String())
+		message.WriteString(fmt.Sprintf("%d. %s %s (Группа: %s, Деталей: %d)\n",
+			i+1, user.FirstName, user.LastName, user.Group, pieceCount))
 	}
 
-	// Отправляем сообщение
 	return c.Send(message.String())
 }
 
@@ -1227,41 +684,36 @@ func (ab *AdminBot) handleUsers(c tele.Context) error {
 func (ab *AdminBot) handleUser(c tele.Context) error {
 	ab.logger.Infof("Пользователь %d запросил информацию о пользователе", c.Sender().ID)
 
-	// Проверяем, является ли пользователь администратором
 	if !ab.isAdmin(c.Sender().ID) {
 		return c.Send("У вас нет доступа к этой команде.")
 	}
 
-	// Получаем ID пользователя из параметров команды
 	args := strings.Fields(c.Message().Payload)
 	if len(args) == 0 {
 		return c.Send("Укажите ID пользователя. Например: /user 123e4567-e89b-12d3-a456-426614174000")
 	}
 
-	userID, err := uuid.Parse(args[0])
-	if err != nil {
-		return c.Send("Неверный формат ID пользователя. Используйте UUID.")
-	}
+	userID := args[0]
 
-	// Получаем пользователя через API
-	userData, err := ab.apiClient.Get("/users/"+userID.String(), nil)
+	userData, err := ab.apiClient.Get("/users/"+userID, nil)
 	if err != nil {
 		ab.logger.Errorf("Ошибка получения пользователя через API: %v", err)
 		return c.Send("Пользователь не найден.")
 	}
 
-	// Декодируем ответ
-	var user models.User
-	if err := json.Unmarshal(userData, &user); err != nil {
+	var userResp struct {
+		models.User
+		PieceCount int `json:"piece_count"`
+	}
+	if err := json.Unmarshal(userData, &userResp); err != nil {
 		ab.logger.Errorf("Ошибка декодирования ответа API: %v", err)
 		return c.Send("Произошла ошибка при получении информации о пользователе. Пожалуйста, попробуйте позже.")
 	}
 
-	if user.Deleted {
+	if userResp.Deleted {
 		return c.Send("Пользователь удален.")
 	}
 
-	// Формируем сообщение с информацией о пользователе
 	message := fmt.Sprintf("Информация о пользователе:\n\n"+
 		"ID: %s\n"+
 		"Имя: %s\n"+
@@ -1269,230 +721,310 @@ func (ab *AdminBot) handleUser(c tele.Context) error {
 		"Отчество: %s\n"+
 		"Telegram: %s\n"+
 		"Группа: %s\n"+
-		"Баллы: %d\n"+
+		"Деталей: %d\n"+
 		"Дата регистрации: %s",
-		user.Id, user.FirstName, user.LastName, user.MiddleName,
-		user.Telegramm, user.Group, user.Points, user.RegistrationTime.Format("02.01.2006 15:04:05"))
+		userResp.Id, userResp.FirstName, userResp.LastName, userResp.MiddleName,
+		userResp.Telegramm, userResp.Group, userResp.PieceCount, userResp.RegistrationTime.Format("02.01.2006 15:04:05"))
 
-	// Отправляем сообщение
 	return c.Send(message)
 }
 
-// handleAddPoints обрабатывает команду /addpoints
-func (ab *AdminBot) handleAddPoints(c tele.Context) error {
-	ab.logger.Infof("Пользователь %d запросил добавление баллов", c.Sender().ID)
+// handlePuzzles обрабатывает команду /puzzles
+func (ab *AdminBot) handlePuzzles(c tele.Context) error {
+	ab.logger.Infof("Пользователь %d запросил список пазлов", c.Sender().ID)
 
-	// Проверяем, является ли пользователь администратором
 	if !ab.isAdmin(c.Sender().ID) {
 		return c.Send("У вас нет доступа к этой команде.")
 	}
 
-	// Получаем параметры команды
-	args := strings.Fields(c.Message().Payload)
-	if len(args) < 2 {
-		return c.Send("Укажите ID пользователя и количество баллов. Например: /addpoints 123e4567-e89b-12d3-a456-426614174000 10")
-	}
-
-	userID, err := uuid.Parse(args[0])
+	puzzlesData, err := ab.apiClient.Get("/puzzles", nil)
 	if err != nil {
-		return c.Send("Неверный формат ID пользователя. Используйте UUID.")
+		ab.logger.Errorf("Ошибка получения пазлов через API: %v", err)
+		return c.Send("Произошла ошибка при получении списка пазлов. Пожалуйста, попробуйте позже.")
 	}
 
-	points, err := strconv.Atoi(args[1])
-	if err != nil {
-		return c.Send("Неверный формат количества баллов. Используйте целое число.")
+	var puzzlesResponse struct {
+		Total   int              `json:"total"`
+		Puzzles []*models.Puzzle `json:"puzzles"`
 	}
-
-	// Получаем пользователя через API
-	userData, err := ab.apiClient.Get("/users/"+userID.String(), nil)
-	if err != nil {
-		ab.logger.Errorf("Ошибка получения пользователя через API: %v", err)
-		return c.Send("Пользователь не найден.")
-	}
-
-	// Декодируем ответ
-	var user models.User
-	if err := json.Unmarshal(userData, &user); err != nil {
+	if err := json.Unmarshal(puzzlesData, &puzzlesResponse); err != nil {
 		ab.logger.Errorf("Ошибка декодирования ответа API: %v", err)
-		return c.Send("Произошла ошибка при получении информации о пользователе. Пожалуйста, попробуйте позже.")
+		return c.Send("Произошла ошибка при получении списка пазлов. Пожалуйста, попробуйте позже.")
 	}
 
-	if user.Deleted {
-		return c.Send("Пользователь удален.")
+	if len(puzzlesResponse.Puzzles) == 0 {
+		return c.Send("Пазлы не найдены.")
 	}
 
-	// Создаем запрос для добавления баллов через API
-	transactionRequest := map[string]interface{}{
-		"user_id": userID.String(),
-		"points":  points,
+	var message strings.Builder
+	message.WriteString(fmt.Sprintf("Список пазлов (%d):\n\n", len(puzzlesResponse.Puzzles)))
+
+	completedCount := 0
+	for _, puzzle := range puzzlesResponse.Puzzles {
+		status := "❌"
+		if puzzle.IsCompleted {
+			status = "✅"
+			completedCount++
+		}
+		name := puzzle.Name
+		if name == "" {
+			name = fmt.Sprintf("Пазл %d", puzzle.Id)
+		}
+		message.WriteString(fmt.Sprintf("#%d %s: %s\n", puzzle.Id, name, status))
 	}
 
-	// Отправляем запрос на добавление баллов через API
-	transactionData, err := ab.apiClient.Post("/transactions", transactionRequest)
-	if err != nil {
-		ab.logger.Errorf("Ошибка добавления баллов через API: %v", err)
-		return c.Send("Произошла ошибка при добавлении баллов. Пожалуйста, попробуйте позже.")
-	}
+	message.WriteString(fmt.Sprintf("\nЗасчитано: %d из %d", completedCount, len(puzzlesResponse.Puzzles)))
+	message.WriteString("\n\nДля засчитывания пазла используйте:\n/complete <номер_пазла>")
 
-	// Декодируем ответ
-	var transactionResponse struct {
-		Success     bool `json:"success"`
-		TotalPoints int  `json:"total_points"`
-	}
-	if err := json.Unmarshal(transactionData, &transactionResponse); err != nil {
-		ab.logger.Errorf("Ошибка декодирования ответа API: %v", err)
-		return c.Send("Произошла ошибка при добавлении баллов. Пожалуйста, попробуйте позже.")
-	}
-
-	// Отправляем сообщение об успешном добавлении баллов
-	return c.Send(fmt.Sprintf("Баллы успешно добавлены!\nПользователь: %s %s\nДобавлено: %d\nВсего баллов: %d",
-		user.FirstName, user.LastName, points, transactionResponse.TotalPoints))
+	return c.Send(message.String())
 }
 
-// handleGenerateCode обрабатывает команду /generatecode
-func (ab *AdminBot) handleGenerateCode(c tele.Context) error {
-	ab.logger.Infof("Пользователь %d запросил генерацию QR-кода", c.Sender().ID)
+// handleCompletePuzzle обрабатывает команду /complete
+func (ab *AdminBot) handleCompletePuzzle(c tele.Context) error {
+	ab.logger.Infof("Пользователь %d вызвал команду /complete", c.Sender().ID)
 
-	// Проверяем, является ли пользователь администратором
 	if !ab.isAdmin(c.Sender().ID) {
 		return c.Send("У вас нет доступа к этой команде.")
 	}
 
-	// Получаем параметры команды
 	args := strings.Fields(c.Message().Payload)
-	if len(args) < 2 {
-		return c.Send("Укажите количество баллов и ограничения. Например: /generatecode 10 3 5 Н1\n" +
-			"Где:\n" +
-			"10 - количество баллов\n" +
-			"3 - максимальное количество использований одним пользователем\n" +
-			"5 - общее количество использований\n" +
-			"Н1 - группа (необязательно)")
+	if len(args) == 0 {
+		return c.Send("Укажите номер пазла. Например: /complete 5")
 	}
 
-	// Парсим параметры
-	amount, err := strconv.Atoi(args[0])
+	puzzleId, err := strconv.Atoi(args[0])
+	if err != nil || puzzleId < 1 || puzzleId > 30 {
+		return c.Send("Неверный номер пазла. Укажите число от 1 до 30.")
+	}
+
+	return ab.completePuzzleAndNotify(c, puzzleId)
+}
+
+// completePuzzleAndNotify засчитывает пазл и создает уведомление для владельцев деталей
+func (ab *AdminBot) completePuzzleAndNotify(c tele.Context, puzzleId int) error {
+	ab.logger.Infof("Засчитывание пазла #%d", puzzleId)
+
+	// Получаем информацию о пазле до засчитывания
+	puzzleData, err := ab.apiClient.Get(fmt.Sprintf("/puzzles/%d", puzzleId), nil)
 	if err != nil {
-		return c.Send("Неверный формат количества баллов. Используйте целое число.")
+		ab.logger.Errorf("Ошибка получения пазла: %v", err)
+		return c.Send("Ошибка: пазл не найден.")
 	}
 
-	perUser := 1
-	if len(args) > 1 {
-		perUser, err = strconv.Atoi(args[1])
-		if err != nil {
-			return c.Send("Неверный формат ограничения на пользователя. Используйте целое число.")
+	var puzzleInfo struct {
+		Id          int    `json:"id"`
+		Name        string `json:"name"`
+		IsCompleted bool   `json:"is_completed"`
+	}
+	json.Unmarshal(puzzleData, &puzzleInfo)
+
+	if puzzleInfo.IsCompleted {
+		return c.Send(fmt.Sprintf("Пазл #%d уже был засчитан ранее.", puzzleId))
+	}
+
+	// Засчитываем пазл через API
+	completeData, err := ab.apiClient.Post(fmt.Sprintf("/puzzles/%d/complete", puzzleId), nil)
+	if err != nil {
+		ab.logger.Errorf("Ошибка засчитывания пазла: %v", err)
+		return c.Send(fmt.Sprintf("Ошибка при засчитывании пазла: %v", err))
+	}
+
+	var completeResponse struct {
+		Success       bool `json:"success"`
+		UsersToNotify []struct {
+			Id        string `json:"id"`
+			Telegramm string `json:"telegramm"`
+			FirstName string `json:"first_name"`
+			LastName  string `json:"last_name"`
+			Group     string `json:"group"`
+		} `json:"users_to_notify"`
+	}
+	if err := json.Unmarshal(completeData, &completeResponse); err != nil {
+		ab.logger.Errorf("Ошибка декодирования ответа: %v", err)
+		return c.Send("Ошибка при обработке ответа сервера.")
+	}
+
+	puzzleName := puzzleInfo.Name
+	if puzzleName == "" {
+		puzzleName = fmt.Sprintf("Пазл #%d", puzzleId)
+	}
+
+	// Собираем список ID пользователей для уведомления
+	var userIds []string
+	for _, user := range completeResponse.UsersToNotify {
+		if user.Id != "" {
+			userIds = append(userIds, user.Id)
 		}
 	}
 
-	total := 0
-	if len(args) > 2 {
-		total, err = strconv.Atoi(args[2])
-		if err != nil {
-			return c.Send("Неверный формат общего ограничения. Используйте целое число.")
-		}
+	keyboard := ab.createMainKeyboard()
+
+	if len(userIds) == 0 {
+		resultMsg := fmt.Sprintf("✅ Пазл \"%s\" (#%d) успешно засчитан!\n\n"+
+			"⚠️ Нет пользователей для уведомления.",
+			puzzleName, puzzleId)
+		return c.Send(resultMsg, keyboard)
 	}
 
-	var group string
-	if len(args) > 3 {
-		group = args[3]
+	// Создаем уведомление через API с конкретными пользователями
+	notificationMsg := fmt.Sprintf("🎉 Поздравляем!\n\n"+
+		"Ваш пазл \"%s\" засчитан!\n"+
+		"Теперь вы участвуете в розыгрыше призов.\n\n"+
+		"Спасибо за участие!", puzzleName)
+
+	notificationData := map[string]interface{}{
+		"message":  notificationMsg,
+		"user_ids": userIds,
 	}
 
-	// Создаем запрос для API
-	codeRequest := map[string]interface{}{
-		"amount":   amount,
-		"per_user": perUser,
-		"total":    total,
-		"group":    group,
-	}
-
-	// Отправляем запрос на создание кода через API
-	codeData, err := ab.apiClient.Post("/codes", codeRequest)
+	_, err = ab.apiClient.Post("/notifications", notificationData)
 	if err != nil {
-		ab.logger.Errorf("Ошибка создания кода через API: %v", err)
-		return c.Send("Произошла ошибка при генерации QR-кода. Пожалуйста, попробуйте позже.")
+		ab.logger.Errorf("Ошибка создания уведомления: %v", err)
+		resultMsg := fmt.Sprintf("✅ Пазл \"%s\" (#%d) успешно засчитан!\n\n"+
+			"⚠️ Ошибка создания уведомления: %v\n"+
+			"Участников: %d",
+			puzzleName, puzzleId, err, len(userIds))
+		return c.Send(resultMsg, keyboard)
 	}
 
-	// Декодируем ответ
-	var code models.Code
-	if err := json.Unmarshal(codeData, &code); err != nil {
+	resultMsg := fmt.Sprintf("✅ Пазл \"%s\" (#%d) успешно засчитан!\n\n"+
+		"📨 Уведомление создано для %d участников.\n"+
+		"Сообщения будут отправлены автоматически.",
+		puzzleName, puzzleId, len(userIds))
+
+	return c.Send(resultMsg, keyboard)
+}
+
+// handlePiecesCommand обрабатывает команду /pieces
+func (ab *AdminBot) handlePiecesCommand(c tele.Context) error {
+	ab.logger.Infof("Пользователь %d запросил список деталей", c.Sender().ID)
+
+	if !ab.isAdmin(c.Sender().ID) {
+		return c.Send("У вас нет доступа к этой команде.")
+	}
+
+	piecesData, err := ab.apiClient.Get("/pieces", nil)
+	if err != nil {
+		ab.logger.Errorf("Ошибка получения деталей через API: %v", err)
+		return c.Send("Произошла ошибка при получении списка деталей. Пожалуйста, попробуйте позже.")
+	}
+
+	var piecesResponse struct {
+		Total  int                   `json:"total"`
+		Pieces []*models.PuzzlePiece `json:"pieces"`
+	}
+	if err := json.Unmarshal(piecesData, &piecesResponse); err != nil {
 		ab.logger.Errorf("Ошибка декодирования ответа API: %v", err)
-		return c.Send("Произошла ошибка при генерации QR-кода. Пожалуйста, попробуйте позже.")
+		return c.Send("Произошла ошибка при получении списка деталей. Пожалуйста, попробуйте позже.")
 	}
 
-	// Формируем сообщение с информацией о коде
-	message := fmt.Sprintf("QR-код успешно сгенерирован!\n\n"+
-		"Код: %s\n"+
-		"Баллы: %d\n"+
-		"Ограничение на пользователя: %d\n"+
-		"Общее ограничение: %d\n"+
-		"Группа: %s\n\n"+
-		"Пользователи могут применить этот код, отправив его текстом боту.",
-		code.Code, code.Amount, code.PerUser, code.Total, code.Group)
+	if piecesResponse.Total == 0 {
+		return c.Send("Детали не найдены. Используйте веб-интерфейс для импорта деталей.")
+	}
 
-	// Отправляем сообщение
+	// Считаем статистику
+	registeredCount := 0
+	for _, piece := range piecesResponse.Pieces {
+		if piece.OwnerId != nil {
+			registeredCount++
+		}
+	}
+
+	message := fmt.Sprintf("Статистика деталей:\n\n"+
+		"Всего деталей: %d\n"+
+		"Зарегистрировано: %d\n"+
+		"Свободно: %d\n\n"+
+		"Для детального просмотра используйте веб-интерфейс.",
+		piecesResponse.Total, registeredCount, piecesResponse.Total-registeredCount)
+
 	return c.Send(message)
+}
+
+// handleLottery обрабатывает команду /lottery
+func (ab *AdminBot) handleLottery(c tele.Context) error {
+	ab.logger.Infof("Пользователь %d запросил статистику розыгрыша", c.Sender().ID)
+
+	if !ab.isAdmin(c.Sender().ID) {
+		return c.Send("У вас нет доступа к этой команде.")
+	}
+
+	lotteryData, err := ab.apiClient.Get("/stats/lottery", nil)
+	if err != nil {
+		ab.logger.Errorf("Ошибка получения статистики розыгрыша через API: %v", err)
+		return c.Send("Произошла ошибка при получении статистики. Пожалуйста, попробуйте позже.")
+	}
+
+	var lotteryResponse struct {
+		TotalUsers       int `json:"total_users"`
+		TotalPuzzles     int `json:"total_puzzles"`
+		CompletedPuzzles int `json:"completed_puzzles"`
+		Users            []struct {
+			FirstName       string `json:"first_name"`
+			LastName        string `json:"last_name"`
+			Group           string `json:"group"`
+			TotalPieces     int    `json:"total_pieces"`
+			CompletedPieces int    `json:"completed_pieces"`
+		} `json:"users"`
+	}
+	if err := json.Unmarshal(lotteryData, &lotteryResponse); err != nil {
+		ab.logger.Errorf("Ошибка декодирования ответа API: %v", err)
+		return c.Send("Произошла ошибка при получении статистики. Пожалуйста, попробуйте позже.")
+	}
+
+	var message strings.Builder
+	message.WriteString("📊 Статистика розыгрыша\n\n")
+	message.WriteString(fmt.Sprintf("Всего пользователей: %d\n", lotteryResponse.TotalUsers))
+	message.WriteString(fmt.Sprintf("Всего пазлов: %d\n", lotteryResponse.TotalPuzzles))
+	message.WriteString(fmt.Sprintf("Собрано пазлов: %d\n\n", lotteryResponse.CompletedPuzzles))
+
+	if len(lotteryResponse.Users) > 0 {
+		message.WriteString("Пользователи с деталями собранных пазлов:\n\n")
+		for i, user := range lotteryResponse.Users {
+			if user.CompletedPieces > 0 {
+				message.WriteString(fmt.Sprintf("%d. %s %s (%s) - %d деталей в собранных пазлах\n",
+					i+1, user.FirstName, user.LastName, user.Group, user.CompletedPieces))
+			}
+		}
+	}
+
+	return c.Send(message.String())
 }
 
 // handleAddAdmin обрабатывает команду /addadmin
 func (ab *AdminBot) handleAddAdmin(c tele.Context) error {
 	ab.logger.Infof("Пользователь %d запросил добавление администратора", c.Sender().ID)
 
-	// Проверяем, является ли пользователь администратором
 	if !ab.isAdmin(c.Sender().ID) {
 		return c.Send("У вас нет доступа к этой команде.")
 	}
 
-	// Получаем ID нового администратора из параметров команды
 	args := strings.Fields(c.Message().Payload)
 	if len(args) == 0 {
 		return c.Send("Укажите ID пользователя. Например: /addadmin 123456789")
 	}
 
-	// Парсим ID
 	adminID, err := strconv.ParseInt(args[0], 10, 64)
 	if err != nil {
 		return c.Send("Неверный формат ID пользователя. Используйте целое число.")
 	}
 
-	// Получаем имя администратора (если указано)
 	var adminName string
 	if len(args) > 1 {
 		adminName = strings.Join(args[1:], " ")
 	}
 
-	// Проверяем, есть ли уже такой администратор
-	for _, admin := range ab.admins.Admins {
-		if admin.ID == adminID {
-			return c.Send(fmt.Sprintf("Пользователь с ID %d уже является администратором.", adminID))
-		}
+	// Проверяем, не является ли уже администратором
+	if ab.isAdmin(adminID) {
+		return c.Send(fmt.Sprintf("Пользователь с ID %d уже является администратором.", adminID))
 	}
 
-	// Создаем запрос для API
-	adminRequest := map[string]interface{}{
-		"id":       adminID,
-		"name":     adminName,
-		"username": "",
-	}
-
-	// Отправляем запрос на добавление администратора через API
-	_, err = ab.apiClient.Post("/api/admin/admins/add", adminRequest)
+	// Добавляем через API
+	err = ab.addAdminViaAPI(adminID, adminName)
 	if err != nil {
 		ab.logger.Errorf("Ошибка добавления администратора через API: %v", err)
 		return c.Send(fmt.Sprintf("Ошибка добавления администратора: %v", err))
 	}
 
-	// Добавляем нового администратора в локальный список
-	ab.admins.Admins = append(ab.admins.Admins, AdminInfo{
-		ID:   adminID,
-		Name: adminName,
-	})
-
-	// Сохраняем список администраторов
-	if err := ab.saveAdmins(); err != nil {
-		ab.logger.Errorf("Ошибка сохранения списка администраторов: %v", err)
-		return c.Send("Произошла ошибка при сохранении списка администраторов.")
-	}
-
-	// Отправляем сообщение об успешном добавлении
 	return c.Send(fmt.Sprintf("Пользователь с ID %d успешно добавлен в список администраторов.", adminID))
 }
 
@@ -1500,60 +1032,24 @@ func (ab *AdminBot) handleAddAdmin(c tele.Context) error {
 func (ab *AdminBot) handleListAdmins(c tele.Context) error {
 	ab.logger.Infof("Пользователь %d запросил список администраторов", c.Sender().ID)
 
-	// Проверяем, является ли пользователь администратором
 	if !ab.isAdmin(c.Sender().ID) {
 		return c.Send("У вас нет доступа к этой команде.")
 	}
 
-	// Получаем список администраторов через API
-	adminsData, err := ab.apiClient.Get("/api/admin/admins", nil)
+	admins, err := ab.getAdminsViaAPI()
 	if err != nil {
-		ab.logger.Errorf("Ошибка получения списка администраторов через API: %v", err)
-
-		// Если API недоступен, используем локальный список администраторов
-		var message strings.Builder
-		message.WriteString("Список администраторов (из локального файла):\n\n")
-
-		for i, admin := range ab.admins.Admins {
-			if admin.Name != "" {
-				message.WriteString(fmt.Sprintf("%d. %d (%s)\n", i+1, admin.ID, admin.Name))
-			} else {
-				message.WriteString(fmt.Sprintf("%d. %d\n", i+1, admin.ID))
-			}
-		}
-
-		// Отправляем сообщение
-		return c.Send(message.String())
+		ab.logger.Errorf("Ошибка получения списка администраторов: %v", err)
+		return c.Send("Ошибка получения списка администраторов.")
 	}
 
-	// Декодируем ответ
-	var adminsResponse struct {
-		Admins []*models.Admin `json:"admins"`
-	}
-	if err := json.Unmarshal(adminsData, &adminsResponse); err != nil {
-		ab.logger.Errorf("Ошибка декодирования ответа API: %v", err)
-
-		// Если не удалось декодировать ответ, используем локальный список администраторов
-		var message strings.Builder
-		message.WriteString("Список администраторов (из локального файла):\n\n")
-
-		for i, admin := range ab.admins.Admins {
-			if admin.Name != "" {
-				message.WriteString(fmt.Sprintf("%d. %d (%s)\n", i+1, admin.ID, admin.Name))
-			} else {
-				message.WriteString(fmt.Sprintf("%d. %d\n", i+1, admin.ID))
-			}
-		}
-
-		// Отправляем сообщение
-		return c.Send(message.String())
+	if len(admins) == 0 {
+		return c.Send("Список администраторов пуст.")
 	}
 
-	// Формируем сообщение со списком администраторов из API
 	var message strings.Builder
 	message.WriteString("Список администраторов:\n\n")
 
-	for i, admin := range adminsResponse.Admins {
+	for i, admin := range admins {
 		if admin.Name != "" {
 			message.WriteString(fmt.Sprintf("%d. %d (%s)\n", i+1, admin.ID, admin.Name))
 		} else {
@@ -1561,73 +1057,6 @@ func (ab *AdminBot) handleListAdmins(c tele.Context) error {
 		}
 	}
 
-	// Отправляем сообщение
-	return c.Send(message.String())
-}
-
-// handleListCodesButton обрабатывает нажатие на кнопку "Список QR-кодов"
-func (ab *AdminBot) handleListCodesButton(c tele.Context) error {
-	ab.logger.Infof("Пользователь %d нажал на кнопку 'Список QR-кодов'", c.Sender().ID)
-
-	// Проверяем, является ли пользователь администратором
-	if !ab.isAdmin(c.Sender().ID) {
-		return c.Send("У вас нет доступа к этой функции.")
-	}
-
-	// Получаем все коды через API
-	codesData, err := ab.apiClient.Get("/codes", nil)
-	if err != nil {
-		ab.logger.Errorf("Ошибка получения кодов через API: %v", err)
-		return c.Send("Произошла ошибка при получении списка QR-кодов. Пожалуйста, попробуйте позже.")
-	}
-
-	// Декодируем ответ
-	var codesResponse struct {
-		Total int            `json:"total"`
-		Codes []*models.Code `json:"codes"`
-	}
-	if err := json.Unmarshal(codesData, &codesResponse); err != nil {
-		ab.logger.Errorf("Ошибка декодирования ответа API: %v", err)
-		return c.Send("Произошла ошибка при получении списка QR-кодов. Пожалуйста, попробуйте позже.")
-	}
-
-	// Фильтруем только активные коды
-	var activeCodes []*models.Code
-	for _, code := range codesResponse.Codes {
-		if code.IsActive {
-			activeCodes = append(activeCodes, code)
-		}
-	}
-
-	if len(activeCodes) == 0 {
-		return c.Send("Активные QR-коды не найдены.")
-	}
-
-	// Формируем сообщение со списком кодов
-	var message strings.Builder
-	message.WriteString("Список активных QR-кодов:\n\n")
-
-	for i, code := range activeCodes {
-		groupInfo := "без ограничений"
-		if code.Group != "" {
-			groupInfo = code.Group
-		}
-
-		perUserInfo := "без ограничений"
-		if code.PerUser > 0 {
-			perUserInfo = fmt.Sprintf("%d", code.PerUser)
-		}
-
-		totalInfo := "без ограничений"
-		if code.Total > 0 {
-			totalInfo = fmt.Sprintf("%d", code.Total)
-		}
-
-		message.WriteString(fmt.Sprintf("%d. Код: %s\n   Баллы: %d\n   Использовано: %d\n   Лимит на пользователя: %s\n   Общий лимит: %s\n   Группа: %s\n\n",
-			i+1, code.Code, code.Amount, code.AppliedCount, perUserInfo, totalInfo, groupInfo))
-	}
-
-	// Отправляем сообщение
 	return c.Send(message.String())
 }
 
@@ -1635,22 +1064,18 @@ func (ab *AdminBot) handleListCodesButton(c tele.Context) error {
 func (ab *AdminBot) handleBroadcastButton(c tele.Context) error {
 	ab.logger.Infof("Пользователь %d нажал на кнопку 'Рассылка'", c.Sender().ID)
 
-	// Проверяем, является ли пользователь администратором
 	if !ab.isAdmin(c.Sender().ID) {
 		return c.Send("У вас нет доступа к этой функции.")
 	}
 
-	// Создаем клавиатуру для рассылки
 	keyboard := ab.createBroadcastKeyboard()
 
-	// Инициализируем состояние для рассылки
 	userID := c.Sender().ID
 	ab.states[userID] = &BotState{
 		State:  "broadcast_text",
 		Params: make(map[string]string),
 	}
 
-	// Отправляем сообщение с инструкцией
 	return c.Send("Введите текст сообщения для рассылки всем пользователям:", keyboard)
 }
 
@@ -1658,11 +1083,9 @@ func (ab *AdminBot) handleBroadcastButton(c tele.Context) error {
 func (ab *AdminBot) createBroadcastKeyboard() *tele.ReplyMarkup {
 	keyboard := &tele.ReplyMarkup{ResizeKeyboard: true}
 
-	// Создаем кнопки
 	btnCancel := keyboard.Text("❌ Отмена")
 	btnBack := keyboard.Text("🔙 Назад")
 
-	// Добавляем кнопки на клавиатуру
 	keyboard.Reply(
 		keyboard.Row(btnCancel),
 		keyboard.Row(btnBack),
@@ -1671,18 +1094,12 @@ func (ab *AdminBot) createBroadcastKeyboard() *tele.ReplyMarkup {
 	return keyboard
 }
 
-// handleText обрабатывает текстовые сообщения (дополнение для рассылки)
+// handleBroadcastText обрабатывает ввод текста для рассылки
 func (ab *AdminBot) handleBroadcastText(c tele.Context, state *BotState) error {
-	// Получаем текст сообщения
 	text := c.Text()
-
-	// Сохраняем текст сообщения
 	state.Params["text"] = text
-
-	// Переходим к следующему шагу - выбор группы
 	state.State = "broadcast_group"
 
-	// Создаем клавиатуру с кнопками групп
 	keyboard := &tele.ReplyMarkup{ResizeKeyboard: true}
 	btnN1 := keyboard.Text("Н1")
 	btnN2 := keyboard.Text("Н2")
@@ -1699,20 +1116,92 @@ func (ab *AdminBot) handleBroadcastText(c tele.Context, state *BotState) error {
 		keyboard.Row(btnCancel),
 	)
 
-	// Отправляем сообщение с запросом группы
 	return c.Send("Выберите группу для рассылки или нажмите кнопку 'Все группы':", keyboard)
 }
 
-// broadcastMessage отправляет сообщение всем пользователям
+// broadcastMessage создает уведомление для рассылки через очередь
 func (ab *AdminBot) broadcastMessage(c tele.Context, text string, group string) error {
-	// Получаем всех пользователей через API
+	// Создаем уведомление через API
+	notificationData := map[string]interface{}{
+		"message": text,
+		"group":   group,
+	}
+
+	responseData, err := ab.apiClient.Post("/notifications", notificationData)
+	if err != nil {
+		ab.logger.Errorf("Ошибка создания уведомления: %v", err)
+		delete(ab.states, c.Sender().ID)
+		keyboard := ab.createMainKeyboard()
+		return c.Send("Ошибка при создании рассылки. Попробуйте позже.", keyboard)
+	}
+
+	var response struct {
+		Success      bool `json:"success"`
+		Notification struct {
+			Id string `json:"id"`
+		} `json:"notification"`
+	}
+	json.Unmarshal(responseData, &response)
+
+	// Сбрасываем состояние
+	delete(ab.states, c.Sender().ID)
+	keyboard := ab.createMainKeyboard()
+
+	groupText := "всем пользователям"
+	if group != "" {
+		groupText = fmt.Sprintf("группе %s", group)
+	}
+
+	return c.Send(fmt.Sprintf("✅ Рассылка создана!\n\nСообщение будет отправлено %s в ближайшее время.", groupText), keyboard)
+}
+
+// handleAllGroupsButton обрабатывает нажатие на кнопку "Все группы"
+func (ab *AdminBot) handleAllGroupsButton(c tele.Context) error {
+	if !ab.isAdmin(c.Sender().ID) {
+		return c.Send("У вас нет доступа к этой функции.")
+	}
+
+	userID := c.Sender().ID
+
+	state, ok := ab.states[userID]
+	if !ok || state.State != "broadcast_group" {
+		keyboard := ab.createMainKeyboard()
+		return c.Send("Используйте кнопки для навигации или /help для просмотра доступных команд.", keyboard)
+	}
+
+	return ab.broadcastMessage(c, state.Params["text"], "")
+}
+
+// handleHelp обрабатывает команду /help
+func (ab *AdminBot) handleHelp(c tele.Context) error {
+	ab.logger.Infof("Пользователь %d запросил справку", c.Sender().ID)
+
+	if !ab.isAdmin(c.Sender().ID) {
+		return c.Send("У вас нет доступа к этому боту.")
+	}
+
+	message := "Доступные команды:\n\n" +
+		"/users [группа] - Список пользователей (опционально фильтр по группе)\n" +
+		"/user <ID> - Информация о пользователе\n" +
+		"/puzzles - Список пазлов\n" +
+		"/pieces - Статистика деталей\n" +
+		"/complete <номер> - Засчитать пазл и уведомить участников\n" +
+		"/lottery - Статистика для розыгрыша\n" +
+		"/addadmin <ID> - Добавить администратора\n" +
+		"/listadmins - Список администраторов\n" +
+		"/help - Показать эту справку"
+
+	return c.Send(message)
+}
+
+// showUsersByGroup показывает пользователей выбранной группы
+func (ab *AdminBot) showUsersByGroup(c tele.Context, group string) error {
 	usersData, err := ab.apiClient.Get("/users", nil)
 	if err != nil {
 		ab.logger.Errorf("Ошибка получения пользователей через API: %v", err)
 		return c.Send("Произошла ошибка при получении пользователей. Пожалуйста, попробуйте позже.")
 	}
 
-	// Декодируем ответ
 	var usersResponse struct {
 		Total int            `json:"total"`
 		Users []*models.User `json:"users"`
@@ -1722,136 +1211,42 @@ func (ab *AdminBot) broadcastMessage(c tele.Context, text string, group string) 
 		return c.Send("Произошла ошибка при получении пользователей. Пожалуйста, попробуйте позже.")
 	}
 
-	// Фильтруем пользователей по группе и исключаем удаленных
 	var filteredUsers []*models.User
 	for _, user := range usersResponse.Users {
-		if (group == "" || user.Group == group) && !user.Deleted {
+		if user.Group == group && !user.Deleted {
 			filteredUsers = append(filteredUsers, user)
 		}
 	}
 
 	if len(filteredUsers) == 0 {
-		if group == "" {
-			return c.Send("Пользователи не найдены.")
-		} else {
-			return c.Send(fmt.Sprintf("Пользователи в группе %s не найдены.", group))
-		}
+		return c.Send(fmt.Sprintf("Пользователи в группе %s не найдены.", group))
 	}
 
-	// Отправляем сообщение о начале рассылки
-	statusMsg, err := c.Bot().Send(c.Recipient(), fmt.Sprintf("Начинаем рассылку для %d пользователей...", len(filteredUsers)))
-	if err != nil {
-		ab.logger.Errorf("Ошибка отправки статусного сообщения: %v", err)
-	}
+	var message strings.Builder
+	message.WriteString(fmt.Sprintf("Список пользователей в группе %s:\n\n", group))
 
-	// Счетчики для статистики
-	successCount := 0
-	errorCount := 0
-
-	// Отправляем сообщение каждому пользователю
 	for i, user := range filteredUsers {
-		// Проверяем, что у пользователя есть Telegram ID
-		if user.Telegramm == "" {
-			ab.logger.Errorf("Пользователь %s не имеет Telegram ID", user.Id)
-			errorCount++
-			continue
-		}
-
-		// Логируем ID пользователя для отладки
-		ab.logger.Infof("Отправка сообщения пользователю %s с Telegram ID: %s", user.Id, user.Telegramm)
-
-		// Парсим Telegram ID из строки, удаляя все нецифровые символы
-		telegramIDStr := strings.TrimSpace(user.Telegramm)
-		// Удаляем все нецифровые символы
-		telegramIDStr = strings.Map(func(r rune) rune {
-			if r >= '0' && r <= '9' {
-				return r
-			}
-			return -1
-		}, telegramIDStr)
-
-		if telegramIDStr == "" {
-			ab.logger.Errorf("Пустой Telegram ID после очистки для пользователя %s", user.Id)
-			errorCount++
-			continue
-		}
-
-		telegramID, parseErr := strconv.ParseInt(telegramIDStr, 10, 64)
-		if parseErr != nil {
-			ab.logger.Errorf("Ошибка парсинга Telegram ID пользователя %s (%s): %v", user.Id, telegramIDStr, parseErr)
-			errorCount++
-			continue
-		}
-
-		// Создаем получателя
-		recipient := &tele.User{
-			ID: telegramID,
-		}
-
-		// Отправляем сообщение
-		_, err := c.Bot().Send(recipient, text)
-		if err != nil {
-			ab.logger.Errorf("Ошибка отправки сообщения пользователю %s (Telegram ID: %d): %v", user.Id, telegramID, err)
-			errorCount++
-		} else {
-			ab.logger.Infof("Успешно отправлено сообщение пользователю %s (Telegram ID: %d)", user.Id, telegramID)
-			successCount++
-		}
-
-		// Обновляем статус каждые 10 пользователей
-		if i%10 == 0 && i > 0 {
-			c.Bot().Edit(statusMsg, fmt.Sprintf("Рассылка в процессе... %d/%d", i, len(filteredUsers)))
-		}
-
-		// Небольшая задержка, чтобы не перегружать API Telegram
-		time.Sleep(100 * time.Millisecond)
+		pieceCount, _ := ab.getUserPieceCount(user.Id.String())
+		message.WriteString(fmt.Sprintf("%d. %s %s (Деталей: %d)\n",
+			i+1, user.FirstName, user.LastName, pieceCount))
 	}
 
-	// Отправляем сообщение о завершении рассылки
-	return c.Send(fmt.Sprintf("Рассылка завершена!\nУспешно отправлено: %d\nОшибок: %d", successCount, errorCount))
+	return c.Send(message.String())
 }
 
-// handleAllGroupsButton обрабатывает нажатие на кнопку "Все группы"
-func (ab *AdminBot) handleAllGroupsButton(c tele.Context) error {
-	// Проверяем, является ли пользователь администратором
-	if !ab.isAdmin(c.Sender().ID) {
-		return c.Send("У вас нет доступа к этой функции.")
+// getUserPieceCount получает количество деталей у пользователя
+func (ab *AdminBot) getUserPieceCount(userID string) (int, error) {
+	piecesData, err := ab.apiClient.Get(fmt.Sprintf("/users/%s/pieces", userID), nil)
+	if err != nil {
+		return 0, err
 	}
 
-	// Получаем ID пользователя
-	userID := c.Sender().ID
-
-	// Проверяем, есть ли у пользователя активное состояние
-	state, ok := ab.states[userID]
-	if !ok || state.State != "broadcast_group" {
-		// Если нет активного состояния или состояние не соответствует, отправляем справку
-		keyboard := ab.createMainKeyboard()
-		return c.Send("Используйте кнопки для навигации или /help для просмотра доступных команд.", keyboard)
+	var piecesResponse struct {
+		Total int `json:"total"`
+	}
+	if err := json.Unmarshal(piecesData, &piecesResponse); err != nil {
+		return 0, err
 	}
 
-	// Рассылка всем пользователям
-	return ab.broadcastMessage(c, state.Params["text"], "")
-}
-
-// handleHelp обрабатывает команду /help
-func (ab *AdminBot) handleHelp(c tele.Context) error {
-	ab.logger.Infof("Пользователь %d запросил справку", c.Sender().ID)
-
-	// Проверяем, является ли пользователь администратором
-	if !ab.isAdmin(c.Sender().ID) {
-		return c.Send("У вас нет доступа к этому боту.")
-	}
-
-	// Формируем сообщение со справкой
-	message := "Доступные команды:\n\n" +
-		"/users [группа] - Список пользователей (опционально фильтр по группе)\n" +
-		"/user <ID> - Информация о пользователе\n" +
-		"/addpoints <ID> <баллы> - Добавить баллы пользователю\n" +
-		"/generatecode <баллы> [перПользователя] [всего] [группа] - Сгенерировать QR-код\n" +
-		"/addadmin <ID> - Добавить администратора\n" +
-		"/listadmins - Список администраторов\n" +
-		"/help - Показать эту справку"
-
-	// Отправляем сообщение
-	return c.Send(message)
+	return piecesResponse.Total, nil
 }

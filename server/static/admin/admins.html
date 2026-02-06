@@ -4,18 +4,19 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Управление администраторами | Система лояльности</title>
+    <title>Управление администраторами | Система пазлов</title>
     <link rel="stylesheet" href="css/styles.css">
     <script src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js" defer></script>
 </head>
 
 <body x-data="adminsApp()">
     <header>
-        <h1>Система лояльности</h1>
+        <h1>Система пазлов</h1>
         <nav>
             <ul>
                 <li><a href="users.html">Пользователи</a></li>
-                <li><a href="codes.html">QR-коды</a></li>
+                <li><a href="puzzles.html">Пазлы</a></li>
+                <li><a href="pieces.html">Детали</a></li>
                 <li><a href="admins.html" class="active">Администраторы</a></li>
                 <li><a href="#" @click.prevent="logout">Выход</a></li>
             </ul>
@@ -80,7 +81,7 @@
     </main>
 
     <footer>
-        <p>&copy; 2025 Система лояльности</p>
+        <p>&copy; 2025 Система пазлов</p>
     </footer>
 
     <script>

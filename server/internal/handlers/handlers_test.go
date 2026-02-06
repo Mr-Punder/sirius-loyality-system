@@ -76,405 +76,6 @@ func TestRegisterUserHandler(t *testing.T) {
 	assert.Equal(t, "Test", response["first_name"])
 	assert.Equal(t, "User", response["last_name"])
 	assert.Equal(t, "Test Group", response["group"])
-	assert.Equal(t, float64(0), response["points"])
-}
-
-func TestCreateCodeHandler(t *testing.T) {
-	handler, _ := setupTest(t)
-
-	// Создаем запрос на создание кода
-	requestBody := map[string]interface{}{
-		"amount":   100,
-		"per_user": 2,
-		"total":    5,
-		"group":    "Test Group",
-	}
-	body, err := json.Marshal(requestBody)
-	require.NoError(t, err)
-
-	req, err := http.NewRequest("POST", "/codes", bytes.NewBuffer(body))
-	require.NoError(t, err)
-	req.Header.Set("Content-Type", "application/json")
-
-	// Создаем ResponseRecorder для записи ответа
-	rr := httptest.NewRecorder()
-
-	// Вызываем обработчик
-	handler.CreateCodeHandler(rr, req)
-
-	// Проверяем статус код
-	assert.Equal(t, http.StatusCreated, rr.Code)
-
-	// Проверяем тело ответа
-	var response map[string]interface{}
-	err = json.Unmarshal(rr.Body.Bytes(), &response)
-	require.NoError(t, err)
-
-	assert.Equal(t, float64(100), response["amount"])
-	assert.Equal(t, float64(2), response["per_user"])
-	assert.Equal(t, float64(5), response["total"])
-	assert.Equal(t, "Test Group", response["group"])
-	assert.Equal(t, float64(0), response["applied_count"])
-	assert.Equal(t, true, response["is_active"])
-	assert.Equal(t, float64(0), response["error_code"])
-}
-
-func TestApplyCodeHandler(t *testing.T) {
-	handler, storage := setupTest(t)
-
-	// Создаем пользователя
-	user := &models.User{
-		Id:               uuid.New(),
-		Telegramm:        "test_user",
-		FirstName:        "Test",
-		LastName:         "User",
-		MiddleName:       "",
-		Points:           0,
-		Group:            "Test Group",
-		RegistrationTime: models.GetCurrentTime(),
-		Deleted:          false,
-	}
-	err := storage.AddUser(user)
-	require.NoError(t, err)
-
-	// Создаем код
-	code := &models.Code{
-		Code:         uuid.New(),
-		Amount:       100,
-		PerUser:      2,
-		Total:        5,
-		AppliedCount: 0,
-		IsActive:     true,
-		Group:        "Test Group",
-		ErrorCode:    models.ErrorCodeNone,
-	}
-	err = storage.AddCode(code)
-	require.NoError(t, err)
-
-	// Тест 1: Успешное применение кода
-	t.Run("SuccessfulApply", func(t *testing.T) {
-		// Создаем запрос на применение кода
-		requestBody := map[string]interface{}{
-			"user_id": user.Id.String(),
-		}
-		body, err := json.Marshal(requestBody)
-		require.NoError(t, err)
-
-		req, err := http.NewRequest("POST", "/codes/"+code.Code.String()+"/apply", bytes.NewBuffer(body))
-		require.NoError(t, err)
-		req.Header.Set("Content-Type", "application/json")
-
-		// Добавляем параметр code в контекст запроса
-		rctx := chi.NewRouteContext()
-		rctx.URLParams.Add("code", code.Code.String())
-		req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
-
-		// Создаем ResponseRecorder для записи ответа
-		rr := httptest.NewRecorder()
-
-		// Вызываем обработчик
-		handler.ApplyCodeHandler(rr, req)
-
-		// Проверяем статус код
-		assert.Equal(t, http.StatusOK, rr.Code)
-
-		// Проверяем тело ответа
-		var response map[string]interface{}
-		err = json.Unmarshal(rr.Body.Bytes(), &response)
-		require.NoError(t, err)
-
-		assert.Equal(t, true, response["success"])
-		assert.Equal(t, float64(100), response["points_added"])
-		assert.Equal(t, float64(100), response["total_points"])
-
-		// Проверяем, что баллы пользователя обновились
-		points, err := storage.GetUserPoints(user.Id)
-		require.NoError(t, err)
-		assert.Equal(t, 100, points)
-
-		// Проверяем, что счетчик использований кода увеличился
-		codeInfo, err := storage.GetCodeInfo(code.Code)
-		require.NoError(t, err)
-		assert.Equal(t, 1, codeInfo.AppliedCount)
-	})
-
-	// Тест 2: Применение кода с ограничением на группу пользователей
-	t.Run("GroupLimitApply", func(t *testing.T) {
-		// Создаем пользователя из другой группы
-		user2 := &models.User{
-			Id:               uuid.New(),
-			Telegramm:        "test_user2",
-			FirstName:        "Test",
-			LastName:         "User2",
-			MiddleName:       "",
-			Points:           0,
-			Group:            "Another Group",
-			RegistrationTime: models.GetCurrentTime(),
-			Deleted:          false,
-		}
-		err := storage.AddUser(user2)
-		require.NoError(t, err)
-
-		// Создаем код с ограничением на группу
-		code2 := &models.Code{
-			Code:         uuid.New(),
-			Amount:       100,
-			PerUser:      2,
-			Total:        5,
-			AppliedCount: 0,
-			IsActive:     true,
-			Group:        "Test Group",
-			ErrorCode:    models.ErrorCodeNone,
-		}
-		err = storage.AddCode(code2)
-		require.NoError(t, err)
-
-		// Создаем запрос на применение кода пользователем из другой группы
-		requestBody := map[string]interface{}{
-			"user_id": user2.Id.String(),
-		}
-		body, err := json.Marshal(requestBody)
-		require.NoError(t, err)
-
-		req, err := http.NewRequest("POST", "/codes/"+code2.Code.String()+"/apply", bytes.NewBuffer(body))
-		require.NoError(t, err)
-		req.Header.Set("Content-Type", "application/json")
-
-		// Добавляем параметр code в контекст запроса
-		rctx := chi.NewRouteContext()
-		rctx.URLParams.Add("code", code2.Code.String())
-		req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
-
-		// Создаем ResponseRecorder для записи ответа
-		rr := httptest.NewRecorder()
-
-		// Вызываем обработчик
-		handler.ApplyCodeHandler(rr, req)
-
-		// Проверяем статус код
-		assert.Equal(t, http.StatusBadRequest, rr.Code)
-
-		// Проверяем тело ответа
-		var response map[string]interface{}
-		err = json.Unmarshal(rr.Body.Bytes(), &response)
-		require.NoError(t, err)
-
-		assert.Equal(t, false, response["success"])
-		assert.Equal(t, "Пользователь не принадлежит к группе, для которой предназначен код", response["error"])
-		assert.Equal(t, float64(models.ErrorCodeInvalidGroup), response["error_code"])
-	})
-
-	// Тест 3: Применение кода с ограничением на количество использований одним пользователем
-	t.Run("PerUserLimitApply", func(t *testing.T) {
-		// Создаем код с ограничением per_user = 1
-		code3 := &models.Code{
-			Code:         uuid.New(),
-			Amount:       100,
-			PerUser:      1,
-			Total:        5,
-			AppliedCount: 0,
-			IsActive:     true,
-			Group:        "",
-			ErrorCode:    models.ErrorCodeNone,
-		}
-		err := storage.AddCode(code3)
-		require.NoError(t, err)
-
-		// Применяем код первый раз
-		requestBody := map[string]interface{}{
-			"user_id": user.Id.String(),
-		}
-		body, err := json.Marshal(requestBody)
-		require.NoError(t, err)
-
-		req, err := http.NewRequest("POST", "/codes/"+code3.Code.String()+"/apply", bytes.NewBuffer(body))
-		require.NoError(t, err)
-		req.Header.Set("Content-Type", "application/json")
-
-		// Добавляем параметр code в контекст запроса
-		rctx := chi.NewRouteContext()
-		rctx.URLParams.Add("code", code3.Code.String())
-		req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
-
-		// Создаем ResponseRecorder для записи ответа
-		rr := httptest.NewRecorder()
-
-		// Вызываем обработчик
-		handler.ApplyCodeHandler(rr, req)
-
-		// Проверяем статус код
-		assert.Equal(t, http.StatusOK, rr.Code)
-
-		// Применяем код второй раз - должна быть ошибка
-		req, err = http.NewRequest("POST", "/codes/"+code3.Code.String()+"/apply", bytes.NewBuffer(body))
-		require.NoError(t, err)
-		req.Header.Set("Content-Type", "application/json")
-
-		// Добавляем параметр code в контекст запроса
-		rctx = chi.NewRouteContext()
-		rctx.URLParams.Add("code", code3.Code.String())
-		req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
-
-		// Создаем ResponseRecorder для записи ответа
-		rr = httptest.NewRecorder()
-
-		// Вызываем обработчик
-		handler.ApplyCodeHandler(rr, req)
-
-		// Проверяем статус код
-		assert.Equal(t, http.StatusBadRequest, rr.Code)
-
-		// Проверяем тело ответа
-		var response map[string]interface{}
-		err = json.Unmarshal(rr.Body.Bytes(), &response)
-		require.NoError(t, err)
-
-		assert.Equal(t, false, response["success"])
-		assert.Equal(t, "Превышено количество использований кода пользователем", response["error"])
-		assert.Equal(t, float64(models.ErrorCodeUserLimitExceeded), response["error_code"])
-	})
-
-	// Тест 4: Применение кода с ограничением на общее количество использований
-	t.Run("TotalLimitApply", func(t *testing.T) {
-		// Создаем код с ограничением total = 1
-		code4 := &models.Code{
-			Code:         uuid.New(),
-			Amount:       100,
-			PerUser:      0,
-			Total:        1,
-			AppliedCount: 0,
-			IsActive:     true,
-			Group:        "",
-			ErrorCode:    models.ErrorCodeNone,
-		}
-		err := storage.AddCode(code4)
-		require.NoError(t, err)
-
-		// Применяем код первый раз
-		requestBody := map[string]interface{}{
-			"user_id": user.Id.String(),
-		}
-		body, err := json.Marshal(requestBody)
-		require.NoError(t, err)
-
-		req, err := http.NewRequest("POST", "/codes/"+code4.Code.String()+"/apply", bytes.NewBuffer(body))
-		require.NoError(t, err)
-		req.Header.Set("Content-Type", "application/json")
-
-		// Добавляем параметр code в контекст запроса
-		rctx := chi.NewRouteContext()
-		rctx.URLParams.Add("code", code4.Code.String())
-		req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
-
-		// Создаем ResponseRecorder для записи ответа
-		rr := httptest.NewRecorder()
-
-		// Вызываем обработчик
-		handler.ApplyCodeHandler(rr, req)
-
-		// Проверяем статус код
-		assert.Equal(t, http.StatusOK, rr.Code)
-
-		// Создаем второго пользователя
-		user3 := &models.User{
-			Id:               uuid.New(),
-			Telegramm:        "test_user3",
-			FirstName:        "Test",
-			LastName:         "User3",
-			MiddleName:       "",
-			Points:           0,
-			Group:            "Test Group",
-			RegistrationTime: models.GetCurrentTime(),
-			Deleted:          false,
-		}
-		err = storage.AddUser(user3)
-		require.NoError(t, err)
-
-		// Применяем код второй раз другим пользователем - должна быть ошибка
-		requestBody = map[string]interface{}{
-			"user_id": user3.Id.String(),
-		}
-		body, err = json.Marshal(requestBody)
-		require.NoError(t, err)
-
-		req, err = http.NewRequest("POST", "/codes/"+code4.Code.String()+"/apply", bytes.NewBuffer(body))
-		require.NoError(t, err)
-		req.Header.Set("Content-Type", "application/json")
-
-		// Добавляем параметр code в контекст запроса
-		rctx = chi.NewRouteContext()
-		rctx.URLParams.Add("code", code4.Code.String())
-		req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
-
-		// Создаем ResponseRecorder для записи ответа
-		rr = httptest.NewRecorder()
-
-		// Вызываем обработчик
-		handler.ApplyCodeHandler(rr, req)
-
-		// Проверяем статус код
-		assert.Equal(t, http.StatusBadRequest, rr.Code)
-
-		// Проверяем тело ответа
-		var response map[string]interface{}
-		err = json.Unmarshal(rr.Body.Bytes(), &response)
-		require.NoError(t, err)
-
-		assert.Equal(t, false, response["success"])
-		assert.Equal(t, "Превышено общее количество использований кода", response["error"])
-		assert.Equal(t, float64(models.ErrorCodeTotalLimitExceeded), response["error_code"])
-	})
-
-	// Тест 5: Применение неактивного кода
-	t.Run("InactiveCodeApply", func(t *testing.T) {
-		// Создаем неактивный код
-		code5 := &models.Code{
-			Code:         uuid.New(),
-			Amount:       100,
-			PerUser:      0,
-			Total:        0,
-			AppliedCount: 0,
-			IsActive:     false,
-			Group:        "",
-			ErrorCode:    models.ErrorCodeNone,
-		}
-		err := storage.AddCode(code5)
-		require.NoError(t, err)
-
-		// Применяем неактивный код
-		requestBody := map[string]interface{}{
-			"user_id": user.Id.String(),
-		}
-		body, err := json.Marshal(requestBody)
-		require.NoError(t, err)
-
-		req, err := http.NewRequest("POST", "/codes/"+code5.Code.String()+"/apply", bytes.NewBuffer(body))
-		require.NoError(t, err)
-		req.Header.Set("Content-Type", "application/json")
-
-		// Добавляем параметр code в контекст запроса
-		rctx := chi.NewRouteContext()
-		rctx.URLParams.Add("code", code5.Code.String())
-		req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
-
-		// Создаем ResponseRecorder для записи ответа
-		rr := httptest.NewRecorder()
-
-		// Вызываем обработчик
-		handler.ApplyCodeHandler(rr, req)
-
-		// Проверяем статус код
-		assert.Equal(t, http.StatusBadRequest, rr.Code)
-
-		// Проверяем тело ответа
-		var response map[string]interface{}
-		err = json.Unmarshal(rr.Body.Bytes(), &response)
-		require.NoError(t, err)
-
-		assert.Equal(t, false, response["success"])
-		assert.Equal(t, "Код не активен", response["error"])
-		assert.Equal(t, float64(models.ErrorCodeCodeInactive), response["error_code"])
-	})
 }
 
 func TestGetUserHandler(t *testing.T) {
@@ -487,7 +88,6 @@ func TestGetUserHandler(t *testing.T) {
 		FirstName:        "Test",
 		LastName:         "User",
 		MiddleName:       "",
-		Points:           0,
 		Group:            "Test Group",
 		RegistrationTime: models.GetCurrentTime(),
 		Deleted:          false,
@@ -514,15 +114,16 @@ func TestGetUserHandler(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rr.Code)
 
 	// Проверяем тело ответа
-	var response models.User
+	var response map[string]interface{}
 	err = json.Unmarshal(rr.Body.Bytes(), &response)
 	require.NoError(t, err)
 
-	assert.Equal(t, user.Id, response.Id)
-	assert.Equal(t, user.Telegramm, response.Telegramm)
-	assert.Equal(t, user.FirstName, response.FirstName)
-	assert.Equal(t, user.LastName, response.LastName)
-	assert.Equal(t, user.Group, response.Group)
+	assert.Equal(t, user.Id.String(), response["id"])
+	assert.Equal(t, user.Telegramm, response["telegramm"])
+	assert.Equal(t, user.FirstName, response["first_name"])
+	assert.Equal(t, user.LastName, response["last_name"])
+	assert.Equal(t, user.Group, response["group"])
+	assert.Equal(t, float64(0), response["piece_count"])
 }
 
 func TestUpdateUserHandler(t *testing.T) {
@@ -535,7 +136,6 @@ func TestUpdateUserHandler(t *testing.T) {
 		FirstName:        "Test",
 		LastName:         "User",
 		MiddleName:       "",
-		Points:           0,
 		Group:            "Test Group",
 		RegistrationTime: models.GetCurrentTime(),
 		Deleted:          false,
@@ -601,7 +201,6 @@ func TestDeleteUserHandler(t *testing.T) {
 		FirstName:        "Test",
 		LastName:         "User",
 		MiddleName:       "",
-		Points:           0,
 		Group:            "Test Group",
 		RegistrationTime: models.GetCurrentTime(),
 		Deleted:          false,
@@ -640,105 +239,18 @@ func TestDeleteUserHandler(t *testing.T) {
 	assert.Contains(t, err.Error(), "user not found")
 }
 
-func TestUpdateCodeHandler(t *testing.T) {
-	handler, storage := setupTest(t)
+func TestGetPuzzlesHandler(t *testing.T) {
+	handler, _ := setupTest(t)
 
-	// Создаем код
-	code := &models.Code{
-		Code:         uuid.New(),
-		Amount:       100,
-		PerUser:      2,
-		Total:        5,
-		AppliedCount: 0,
-		IsActive:     true,
-		Group:        "Test Group",
-		ErrorCode:    models.ErrorCodeNone,
-	}
-	err := storage.AddCode(code)
+	// Создаем запрос на получение списка пазлов
+	req, err := http.NewRequest("GET", "/puzzles", nil)
 	require.NoError(t, err)
-
-	// Создаем запрос на обновление информации о коде
-	requestBody := map[string]interface{}{
-		"amount":    200,
-		"per_user":  3,
-		"total":     10,
-		"is_active": true,
-		"group":     "Updated Group",
-	}
-	body, err := json.Marshal(requestBody)
-	require.NoError(t, err)
-
-	req, err := http.NewRequest("PUT", "/codes/"+code.Code.String(), bytes.NewBuffer(body))
-	require.NoError(t, err)
-	req.Header.Set("Content-Type", "application/json")
-
-	// Добавляем параметр code в контекст запроса
-	rctx := chi.NewRouteContext()
-	rctx.URLParams.Add("code", code.Code.String())
-	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
 
 	// Создаем ResponseRecorder для записи ответа
 	rr := httptest.NewRecorder()
 
 	// Вызываем обработчик
-	handler.UpdateCodeHandler(rr, req)
-
-	// Проверяем статус код
-	assert.Equal(t, http.StatusOK, rr.Code)
-
-	// Проверяем тело ответа
-	var response models.Code
-	err = json.Unmarshal(rr.Body.Bytes(), &response)
-	require.NoError(t, err)
-
-	assert.Equal(t, code.Code, response.Code)
-	assert.Equal(t, 200, response.Amount)
-	assert.Equal(t, 3, response.PerUser)
-	assert.Equal(t, 10, response.Total)
-	assert.Equal(t, true, response.IsActive)
-	assert.Equal(t, "Updated Group", response.Group)
-
-	// Проверяем, что данные кода обновились в хранилище
-	updatedCode, err := storage.GetCodeInfo(code.Code)
-	require.NoError(t, err)
-	assert.Equal(t, 200, updatedCode.Amount)
-	assert.Equal(t, 3, updatedCode.PerUser)
-	assert.Equal(t, 10, updatedCode.Total)
-	assert.Equal(t, true, updatedCode.IsActive)
-	assert.Equal(t, "Updated Group", updatedCode.Group)
-}
-
-func TestDeleteCodeHandler(t *testing.T) {
-	handler, storage := setupTest(t)
-
-	// Создаем код
-	code := &models.Code{
-		Code:         uuid.New(),
-		Amount:       100,
-		PerUser:      2,
-		Total:        5,
-		AppliedCount: 0,
-		IsActive:     true,
-		Group:        "Test Group",
-		ErrorCode:    models.ErrorCodeNone,
-	}
-	err := storage.AddCode(code)
-	require.NoError(t, err)
-
-	// Создаем запрос на деактивацию кода
-	req, err := http.NewRequest("DELETE", "/codes/"+code.Code.String(), nil)
-	require.NoError(t, err)
-
-	// Добавляем параметр code в контекст запроса
-	rctx := chi.NewRouteContext()
-	rctx.URLParams.Add("code", code.Code.String())
-	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
-
-	// Создаем ResponseRecorder для записи ответа
-	rr := httptest.NewRecorder()
-
-	// Вызываем обработчик
-	handler.DeleteCodeHandler(rr, req)
+	handler.GetPuzzlesHandler(rr, req)
 
 	// Проверяем статус код
 	assert.Equal(t, http.StatusOK, rr.Code)
@@ -748,10 +260,601 @@ func TestDeleteCodeHandler(t *testing.T) {
 	err = json.Unmarshal(rr.Body.Bytes(), &response)
 	require.NoError(t, err)
 
-	assert.Equal(t, true, response["success"])
+	// Memstorage инициализирует 30 пазлов
+	assert.Equal(t, float64(30), response["total"])
+	puzzles := response["puzzles"].([]interface{})
+	assert.Len(t, puzzles, 30)
+}
 
-	// Проверяем, что код деактивирован
-	codeInfo, err := storage.GetCodeInfo(code.Code)
+func TestGetPuzzleHandler(t *testing.T) {
+	handler, _ := setupTest(t)
+
+	// Создаем запрос на получение информации о пазле
+	req, err := http.NewRequest("GET", "/puzzles/1", nil)
 	require.NoError(t, err)
-	assert.False(t, codeInfo.IsActive)
+
+	// Добавляем параметр id в контекст запроса
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("id", "1")
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+
+	// Создаем ResponseRecorder для записи ответа
+	rr := httptest.NewRecorder()
+
+	// Вызываем обработчик
+	handler.GetPuzzleHandler(rr, req)
+
+	// Проверяем статус код
+	assert.Equal(t, http.StatusOK, rr.Code)
+
+	// Проверяем тело ответа
+	var response map[string]interface{}
+	err = json.Unmarshal(rr.Body.Bytes(), &response)
+	require.NoError(t, err)
+
+	assert.Equal(t, float64(1), response["id"])
+	assert.Equal(t, false, response["is_completed"])
+	assert.Equal(t, float64(0), response["total_pieces"])
+	assert.Equal(t, float64(0), response["owned_pieces"])
+}
+
+func TestAddPiecesHandler(t *testing.T) {
+	handler, storage := setupTest(t)
+
+	// Создаем запрос на добавление деталей
+	requestBody := map[string]interface{}{
+		"pieces": []map[string]interface{}{
+			{"code": "ABC1234", "puzzle_id": 1, "piece_number": 1},
+			{"code": "DEF5678", "puzzle_id": 1, "piece_number": 2},
+			{"code": "GHI9012", "puzzle_id": 1, "piece_number": 3},
+		},
+	}
+	body, err := json.Marshal(requestBody)
+	require.NoError(t, err)
+
+	req, err := http.NewRequest("POST", "/pieces", bytes.NewBuffer(body))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+
+	// Создаем ResponseRecorder для записи ответа
+	rr := httptest.NewRecorder()
+
+	// Вызываем обработчик
+	handler.AddPiecesHandler(rr, req)
+
+	// Проверяем статус код
+	assert.Equal(t, http.StatusCreated, rr.Code)
+
+	// Проверяем тело ответа
+	var response map[string]interface{}
+	err = json.Unmarshal(rr.Body.Bytes(), &response)
+	require.NoError(t, err)
+
+	assert.Equal(t, true, response["success"])
+	assert.Equal(t, float64(3), response["added"])
+
+	// Проверяем, что детали добавлены в хранилище
+	piece, err := storage.GetPuzzlePiece("ABC1234")
+	require.NoError(t, err)
+	assert.Equal(t, "ABC1234", piece.Code)
+	assert.Equal(t, 1, piece.PuzzleId)
+	assert.Equal(t, 1, piece.PieceNumber)
+	assert.Nil(t, piece.OwnerId)
+}
+
+func TestGetAllPiecesHandler(t *testing.T) {
+	handler, storage := setupTest(t)
+
+	// Добавляем тестовые детали
+	pieces := []*models.PuzzlePiece{
+		{Code: "TEST001", PuzzleId: 1, PieceNumber: 1},
+		{Code: "TEST002", PuzzleId: 1, PieceNumber: 2},
+		{Code: "TEST003", PuzzleId: 2, PieceNumber: 1},
+	}
+	err := storage.AddPuzzlePieces(pieces)
+	require.NoError(t, err)
+
+	// Создаем запрос на получение списка деталей
+	req, err := http.NewRequest("GET", "/pieces", nil)
+	require.NoError(t, err)
+
+	// Создаем ResponseRecorder для записи ответа
+	rr := httptest.NewRecorder()
+
+	// Вызываем обработчик
+	handler.GetAllPiecesHandler(rr, req)
+
+	// Проверяем статус код
+	assert.Equal(t, http.StatusOK, rr.Code)
+
+	// Проверяем тело ответа
+	var response map[string]interface{}
+	err = json.Unmarshal(rr.Body.Bytes(), &response)
+	require.NoError(t, err)
+
+	assert.Equal(t, float64(3), response["total"])
+}
+
+func TestGetAllPiecesHandler_WithFilters(t *testing.T) {
+	handler, storage := setupTest(t)
+
+	// Добавляем тестовые детали
+	userId := uuid.New()
+	pieces := []*models.PuzzlePiece{
+		{Code: "TEST001", PuzzleId: 1, PieceNumber: 1, OwnerId: &userId},
+		{Code: "TEST002", PuzzleId: 1, PieceNumber: 2},
+		{Code: "TEST003", PuzzleId: 2, PieceNumber: 1},
+	}
+	err := storage.AddPuzzlePieces(pieces)
+	require.NoError(t, err)
+
+	// Тест фильтра по пазлу
+	t.Run("FilterByPuzzle", func(t *testing.T) {
+		req, err := http.NewRequest("GET", "/pieces?puzzle_id=1", nil)
+		require.NoError(t, err)
+
+		rr := httptest.NewRecorder()
+		handler.GetAllPiecesHandler(rr, req)
+
+		assert.Equal(t, http.StatusOK, rr.Code)
+
+		var response map[string]interface{}
+		err = json.Unmarshal(rr.Body.Bytes(), &response)
+		require.NoError(t, err)
+
+		assert.Equal(t, float64(2), response["total"])
+	})
+
+	// Тест фильтра по наличию владельца
+	t.Run("FilterByOwner", func(t *testing.T) {
+		req, err := http.NewRequest("GET", "/pieces?has_owner=true", nil)
+		require.NoError(t, err)
+
+		rr := httptest.NewRecorder()
+		handler.GetAllPiecesHandler(rr, req)
+
+		assert.Equal(t, http.StatusOK, rr.Code)
+
+		var response map[string]interface{}
+		err = json.Unmarshal(rr.Body.Bytes(), &response)
+		require.NoError(t, err)
+
+		assert.Equal(t, float64(1), response["total"])
+	})
+}
+
+func TestGetPieceHandler(t *testing.T) {
+	handler, storage := setupTest(t)
+
+	// Добавляем тестовую деталь
+	piece := &models.PuzzlePiece{
+		Code:        "TESTCODE",
+		PuzzleId:    1,
+		PieceNumber: 1,
+	}
+	err := storage.AddPuzzlePiece(piece)
+	require.NoError(t, err)
+
+	// Создаем запрос на получение информации о детали
+	req, err := http.NewRequest("GET", "/pieces/TESTCODE", nil)
+	require.NoError(t, err)
+
+	// Добавляем параметр code в контекст запроса
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("code", "TESTCODE")
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+
+	// Создаем ResponseRecorder для записи ответа
+	rr := httptest.NewRecorder()
+
+	// Вызываем обработчик
+	handler.GetPieceHandler(rr, req)
+
+	// Проверяем статус код
+	assert.Equal(t, http.StatusOK, rr.Code)
+
+	// Проверяем тело ответа
+	var response map[string]interface{}
+	err = json.Unmarshal(rr.Body.Bytes(), &response)
+	require.NoError(t, err)
+
+	assert.Equal(t, "TESTCODE", response["code"])
+	assert.Equal(t, float64(1), response["puzzle_id"])
+	assert.Equal(t, float64(1), response["piece_number"])
+}
+
+func TestRegisterPieceHandler(t *testing.T) {
+	handler, storage := setupTest(t)
+
+	// Создаем пользователя
+	user := &models.User{
+		Id:               uuid.New(),
+		Telegramm:        "test_user",
+		FirstName:        "Test",
+		LastName:         "User",
+		Group:            "Test Group",
+		RegistrationTime: models.GetCurrentTime(),
+		Deleted:          false,
+	}
+	err := storage.AddUser(user)
+	require.NoError(t, err)
+
+	// Добавляем тестовую деталь
+	piece := &models.PuzzlePiece{
+		Code:        "REG_TEST",
+		PuzzleId:    1,
+		PieceNumber: 1,
+	}
+	err = storage.AddPuzzlePiece(piece)
+	require.NoError(t, err)
+
+	// Тест успешной регистрации
+	t.Run("SuccessfulRegister", func(t *testing.T) {
+		requestBody := map[string]interface{}{
+			"user_id": user.Id.String(),
+		}
+		body, err := json.Marshal(requestBody)
+		require.NoError(t, err)
+
+		req, err := http.NewRequest("POST", "/pieces/REG_TEST/register", bytes.NewBuffer(body))
+		require.NoError(t, err)
+		req.Header.Set("Content-Type", "application/json")
+
+		rctx := chi.NewRouteContext()
+		rctx.URLParams.Add("code", "REG_TEST")
+		req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+
+		rr := httptest.NewRecorder()
+		handler.RegisterPieceHandler(rr, req)
+
+		assert.Equal(t, http.StatusOK, rr.Code)
+
+		var response map[string]interface{}
+		err = json.Unmarshal(rr.Body.Bytes(), &response)
+		require.NoError(t, err)
+
+		assert.Equal(t, true, response["success"])
+		assert.Equal(t, false, response["puzzle_completed"])
+
+		// Проверяем, что деталь зарегистрирована
+		registeredPiece, err := storage.GetPuzzlePiece("REG_TEST")
+		require.NoError(t, err)
+		assert.NotNil(t, registeredPiece.OwnerId)
+		assert.Equal(t, user.Id, *registeredPiece.OwnerId)
+	})
+
+	// Тест: деталь уже занята
+	t.Run("PieceAlreadyTaken", func(t *testing.T) {
+		// Создаем второго пользователя
+		user2 := &models.User{
+			Id:               uuid.New(),
+			Telegramm:        "test_user2",
+			FirstName:        "Test2",
+			LastName:         "User2",
+			Group:            "Test Group",
+			RegistrationTime: models.GetCurrentTime(),
+			Deleted:          false,
+		}
+		err := storage.AddUser(user2)
+		require.NoError(t, err)
+
+		// Пытаемся зарегистрировать уже занятую деталь
+		requestBody := map[string]interface{}{
+			"user_id": user2.Id.String(),
+		}
+		body, err := json.Marshal(requestBody)
+		require.NoError(t, err)
+
+		req, err := http.NewRequest("POST", "/pieces/REG_TEST/register", bytes.NewBuffer(body))
+		require.NoError(t, err)
+		req.Header.Set("Content-Type", "application/json")
+
+		rctx := chi.NewRouteContext()
+		rctx.URLParams.Add("code", "REG_TEST")
+		req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+
+		rr := httptest.NewRecorder()
+		handler.RegisterPieceHandler(rr, req)
+
+		assert.Equal(t, http.StatusBadRequest, rr.Code)
+
+		var response map[string]interface{}
+		err = json.Unmarshal(rr.Body.Bytes(), &response)
+		require.NoError(t, err)
+
+		assert.Equal(t, false, response["success"])
+		assert.Equal(t, float64(models.PieceErrorAlreadyTaken), response["error_code"])
+	})
+
+	// Тест: деталь не найдена
+	t.Run("PieceNotFound", func(t *testing.T) {
+		requestBody := map[string]interface{}{
+			"user_id": user.Id.String(),
+		}
+		body, err := json.Marshal(requestBody)
+		require.NoError(t, err)
+
+		req, err := http.NewRequest("POST", "/pieces/NONEXISTENT/register", bytes.NewBuffer(body))
+		require.NoError(t, err)
+		req.Header.Set("Content-Type", "application/json")
+
+		rctx := chi.NewRouteContext()
+		rctx.URLParams.Add("code", "NONEXISTENT")
+		req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+
+		rr := httptest.NewRecorder()
+		handler.RegisterPieceHandler(rr, req)
+
+		assert.Equal(t, http.StatusNotFound, rr.Code)
+
+		var response map[string]interface{}
+		err = json.Unmarshal(rr.Body.Bytes(), &response)
+		require.NoError(t, err)
+
+		assert.Equal(t, false, response["success"])
+		assert.Equal(t, float64(models.PieceErrorNotFound), response["error_code"])
+	})
+}
+
+func TestRegisterPieceHandler_AllPiecesDistributed(t *testing.T) {
+	handler, storage := setupTest(t)
+
+	// Создаем пользователей
+	users := make([]*models.User, 6)
+	for i := 0; i < 6; i++ {
+		users[i] = &models.User{
+			Id:               uuid.New(),
+			Telegramm:        "user" + string(rune('0'+i)),
+			FirstName:        "User",
+			LastName:         string(rune('0' + i)),
+			Group:            "Test",
+			RegistrationTime: models.GetCurrentTime(),
+			Deleted:          false,
+		}
+		err := storage.AddUser(users[i])
+		require.NoError(t, err)
+	}
+
+	// Добавляем 6 деталей для пазла 1
+	for i := 1; i <= 6; i++ {
+		piece := &models.PuzzlePiece{
+			Code:        "PUZZLE1_" + string(rune('0'+i)),
+			PuzzleId:    1,
+			PieceNumber: i,
+		}
+		err := storage.AddPuzzlePiece(piece)
+		require.NoError(t, err)
+	}
+
+	// Регистрируем первые 5 деталей
+	for i := 0; i < 5; i++ {
+		requestBody := map[string]interface{}{
+			"user_id": users[i].Id.String(),
+		}
+		body, err := json.Marshal(requestBody)
+		require.NoError(t, err)
+
+		code := "PUZZLE1_" + string(rune('0'+i+1))
+		req, err := http.NewRequest("POST", "/pieces/"+code+"/register", bytes.NewBuffer(body))
+		require.NoError(t, err)
+		req.Header.Set("Content-Type", "application/json")
+
+		rctx := chi.NewRouteContext()
+		rctx.URLParams.Add("code", code)
+		req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+
+		rr := httptest.NewRecorder()
+		handler.RegisterPieceHandler(rr, req)
+
+		assert.Equal(t, http.StatusOK, rr.Code)
+
+		var response map[string]interface{}
+		err = json.Unmarshal(rr.Body.Bytes(), &response)
+		require.NoError(t, err)
+
+		// Первые 5 регистраций - не все детали розданы
+		assert.Equal(t, false, response["puzzle_completed"], "После %d регистрации не все детали должны быть розданы", i+1)
+	}
+
+	// Регистрируем 6-ю деталь - все детали розданы
+	requestBody := map[string]interface{}{
+		"user_id": users[5].Id.String(),
+	}
+	body, err := json.Marshal(requestBody)
+	require.NoError(t, err)
+
+	req, err := http.NewRequest("POST", "/pieces/PUZZLE1_6/register", bytes.NewBuffer(body))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("code", "PUZZLE1_6")
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+
+	rr := httptest.NewRecorder()
+	handler.RegisterPieceHandler(rr, req)
+
+	assert.Equal(t, http.StatusOK, rr.Code)
+
+	var response map[string]interface{}
+	err = json.Unmarshal(rr.Body.Bytes(), &response)
+	require.NoError(t, err)
+
+	// 6-я регистрация - все детали розданы (но пазл НЕ завершен автоматически)
+	assert.Equal(t, true, response["puzzle_completed"], "После 6-й регистрации все детали должны быть розданы")
+
+	// Проверяем, что пазл НЕ помечен как завершенный (требуется ручное завершение админом)
+	puzzle, err := storage.GetPuzzle(1)
+	require.NoError(t, err)
+	assert.False(t, puzzle.IsCompleted, "Пазл не должен быть автоматически завершен")
+	assert.Nil(t, puzzle.CompletedAt, "Время завершения должно быть nil")
+}
+
+func TestCompletePuzzleHandler(t *testing.T) {
+	handler, storage := setupTest(t)
+
+	// Создаем пользователей и регистрируем все 6 деталей
+	users := make([]*models.User, 6)
+	for i := 0; i < 6; i++ {
+		users[i] = &models.User{
+			Id:               uuid.New(),
+			Telegramm:        "complete_user" + string(rune('0'+i)),
+			FirstName:        "User",
+			LastName:         string(rune('0' + i)),
+			Group:            "Test",
+			RegistrationTime: models.GetCurrentTime(),
+			Deleted:          false,
+		}
+		err := storage.AddUser(users[i])
+		require.NoError(t, err)
+
+		piece := &models.PuzzlePiece{
+			Code:        "COMPLETE_" + string(rune('0'+i+1)),
+			PuzzleId:    1,
+			PieceNumber: i + 1,
+			OwnerId:     &users[i].Id,
+		}
+		err = storage.AddPuzzlePiece(piece)
+		require.NoError(t, err)
+	}
+
+	// Завершаем пазл через API
+	req, err := http.NewRequest("POST", "/puzzles/1/complete", nil)
+	require.NoError(t, err)
+
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("id", "1")
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+
+	rr := httptest.NewRecorder()
+	handler.CompletePuzzleHandler(rr, req)
+
+	assert.Equal(t, http.StatusOK, rr.Code)
+
+	var response map[string]interface{}
+	err = json.Unmarshal(rr.Body.Bytes(), &response)
+	require.NoError(t, err)
+
+	assert.Equal(t, true, response["success"])
+	usersToNotify := response["users_to_notify"].([]interface{})
+	assert.Len(t, usersToNotify, 6, "Должно быть 6 владельцев для уведомления")
+
+	// Проверяем, что пазл помечен как завершенный
+	puzzle, err := storage.GetPuzzle(1)
+	require.NoError(t, err)
+	assert.True(t, puzzle.IsCompleted)
+	assert.NotNil(t, puzzle.CompletedAt)
+
+	// Попытка повторного завершения должна вернуть ошибку
+	rr2 := httptest.NewRecorder()
+	req2, _ := http.NewRequest("POST", "/puzzles/1/complete", nil)
+	rctx2 := chi.NewRouteContext()
+	rctx2.URLParams.Add("id", "1")
+	req2 = req2.WithContext(context.WithValue(req2.Context(), chi.RouteCtxKey, rctx2))
+
+	handler.CompletePuzzleHandler(rr2, req2)
+	assert.Equal(t, http.StatusBadRequest, rr2.Code)
+}
+
+func TestGetUserPiecesHandler(t *testing.T) {
+	handler, storage := setupTest(t)
+
+	// Создаем пользователя
+	user := &models.User{
+		Id:               uuid.New(),
+		Telegramm:        "test_user",
+		FirstName:        "Test",
+		LastName:         "User",
+		Group:            "Test Group",
+		RegistrationTime: models.GetCurrentTime(),
+		Deleted:          false,
+	}
+	err := storage.AddUser(user)
+	require.NoError(t, err)
+
+	// Добавляем детали и регистрируем их на пользователя
+	pieces := []*models.PuzzlePiece{
+		{Code: "USER_P1", PuzzleId: 1, PieceNumber: 1, OwnerId: &user.Id},
+		{Code: "USER_P2", PuzzleId: 1, PieceNumber: 2, OwnerId: &user.Id},
+		{Code: "OTHER_P", PuzzleId: 2, PieceNumber: 1}, // Без владельца
+	}
+	err = storage.AddPuzzlePieces(pieces)
+	require.NoError(t, err)
+
+	// Создаем запрос на получение деталей пользователя
+	req, err := http.NewRequest("GET", "/users/"+user.Id.String()+"/pieces", nil)
+	require.NoError(t, err)
+
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("id", user.Id.String())
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+
+	rr := httptest.NewRecorder()
+	handler.GetUserPiecesHandler(rr, req)
+
+	assert.Equal(t, http.StatusOK, rr.Code)
+
+	var response map[string]interface{}
+	err = json.Unmarshal(rr.Body.Bytes(), &response)
+	require.NoError(t, err)
+
+	// У пользователя должно быть 2 детали
+	assert.Equal(t, float64(2), response["total"])
+}
+
+func TestGetLotteryStatsHandler(t *testing.T) {
+	handler, storage := setupTest(t)
+
+	// Создаем пользователей
+	user1 := &models.User{
+		Id:               uuid.New(),
+		Telegramm:        "user1",
+		FirstName:        "User",
+		LastName:         "One",
+		Group:            "Group1",
+		RegistrationTime: models.GetCurrentTime(),
+		Deleted:          false,
+	}
+	user2 := &models.User{
+		Id:               uuid.New(),
+		Telegramm:        "user2",
+		FirstName:        "User",
+		LastName:         "Two",
+		Group:            "Group2",
+		RegistrationTime: models.GetCurrentTime(),
+		Deleted:          false,
+	}
+	err := storage.AddUser(user1)
+	require.NoError(t, err)
+	err = storage.AddUser(user2)
+	require.NoError(t, err)
+
+	// Добавляем детали
+	pieces := []*models.PuzzlePiece{
+		{Code: "STAT1", PuzzleId: 1, PieceNumber: 1, OwnerId: &user1.Id},
+		{Code: "STAT2", PuzzleId: 1, PieceNumber: 2, OwnerId: &user1.Id},
+		{Code: "STAT3", PuzzleId: 2, PieceNumber: 1, OwnerId: &user2.Id},
+	}
+	err = storage.AddPuzzlePieces(pieces)
+	require.NoError(t, err)
+
+	// Создаем запрос на получение статистики
+	req, err := http.NewRequest("GET", "/stats/lottery", nil)
+	require.NoError(t, err)
+
+	rr := httptest.NewRecorder()
+	handler.GetLotteryStatsHandler(rr, req)
+
+	assert.Equal(t, http.StatusOK, rr.Code)
+
+	var response map[string]interface{}
+	err = json.Unmarshal(rr.Body.Bytes(), &response)
+	require.NoError(t, err)
+
+	assert.Equal(t, float64(2), response["total_users"])
+	assert.Equal(t, float64(30), response["total_puzzles"]) // Memstorage инициализирует 30 пазлов
+	assert.Equal(t, float64(0), response["completed_puzzles"])
+
+	users := response["users"].([]interface{})
+	assert.Len(t, users, 2)
 }

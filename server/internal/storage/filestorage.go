@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/MrPunder/sirius-loyality-system/internal/models"
 	"github.com/google/uuid"
@@ -14,26 +15,26 @@ import (
 
 // Константы для имен файлов
 const (
-	UsersFileName        = "users.json"
-	TransactionsFileName = "transactions.json"
-	CodesFileName        = "codes.json"
-	CodeUsagesFileName   = "code_usages.json"
-	AdminsFileName       = "admins.json"
+	UsersFileName         = "users.json"
+	PuzzlesFileName       = "puzzles.json"
+	PuzzlePiecesFileName  = "puzzle_pieces.json"
+	AdminsFileName        = "admins.json"
+	NotificationsFileName = "notifications.json"
 )
 
 // Filestorage реализует интерфейс Storage с хранением данных в файлах
 type Filestorage struct {
-	users        sync.Map // uuid.UUID -> *models.User
-	transactions sync.Map // uuid.UUID -> *models.Transaction
-	codes        sync.Map // uuid.UUID -> *models.Code
-	codeUsages   sync.Map // uuid.UUID -> *models.CodeUsage
-	admins       sync.Map // int64 -> *models.Admin
-	dataDir      string   // Директория для хранения файлов данных
+	users         sync.Map // uuid.UUID -> *models.User
+	puzzles       sync.Map // int -> *models.Puzzle
+	puzzlePieces  sync.Map // string -> *models.PuzzlePiece
+	admins        sync.Map // int64 -> *models.Admin
+	notifications sync.Map // uuid.UUID -> *models.Notification
+	dataDir       string
+	mu            sync.Mutex
 }
 
 // NewFilestorage создает новое файловое хранилище
 func NewFilestorage(dataDir string) (*Filestorage, error) {
-	// Создаем директорию, если она не существует
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create data directory: %w", err)
 	}
@@ -42,7 +43,11 @@ func NewFilestorage(dataDir string) (*Filestorage, error) {
 		dataDir: dataDir,
 	}
 
-	// Загружаем данные из файлов
+	// Инициализируем 30 пазлов
+	for i := 1; i <= 30; i++ {
+		fs.puzzles.Store(i, &models.Puzzle{Id: i, IsCompleted: false})
+	}
+
 	if err := fs.loadData(); err != nil {
 		return nil, fmt.Errorf("failed to load data: %w", err)
 	}
@@ -50,130 +55,41 @@ func NewFilestorage(dataDir string) (*Filestorage, error) {
 	return fs, nil
 }
 
-// loadData загружает данные из файлов
 func (fs *Filestorage) loadData() error {
-	// Загружаем пользователей
 	if err := fs.loadUsers(); err != nil {
 		return err
 	}
-
-	// Загружаем транзакции
-	if err := fs.loadTransactions(); err != nil {
+	if err := fs.loadPuzzles(); err != nil {
 		return err
 	}
-
-	// Загружаем коды
-	if err := fs.loadCodes(); err != nil {
+	if err := fs.loadPuzzlePieces(); err != nil {
 		return err
 	}
-
-	// Загружаем использования кодов
-	if err := fs.loadCodeUsages(); err != nil {
-		return err
-	}
-
-	// Загружаем администраторов
 	if err := fs.loadAdmins(); err != nil {
 		return err
 	}
-
+	if err := fs.loadNotifications(); err != nil {
+		return err
+	}
 	return nil
 }
 
-// loadAdmins загружает администраторов из файла
-func (fs *Filestorage) loadAdmins() error {
-	filePath := filepath.Join(fs.dataDir, AdminsFileName)
-
-	// Проверяем, существует ли файл
-	if _, err := os.Stat(filePath); os.IsNotExist(err) {
-		// Файл не существует, создаем пустой файл
-		if err := fs.saveAdmins(); err != nil {
-			return err
-		}
-		return nil
-	}
-
-	// Читаем файл
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		return fmt.Errorf("failed to read admins file: %w", err)
-	}
-
-	// Если файл пустой, ничего не делаем
-	if len(data) == 0 {
-		return nil
-	}
-
-	// Десериализуем данные
-	var admins []*models.Admin
-	if err := json.Unmarshal(data, &admins); err != nil {
-		return fmt.Errorf("failed to unmarshal admins: %w", err)
-	}
-
-	// Сохраняем администраторов в память
-	for _, admin := range admins {
-		fs.admins.Store(admin.ID, admin)
-	}
-
-	return nil
-}
-
-// saveAdmins сохраняет администраторов в файл
-func (fs *Filestorage) saveAdmins() error {
-	filePath := filepath.Join(fs.dataDir, AdminsFileName)
-
-	// Собираем всех администраторов
-	var admins []*models.Admin
-	fs.admins.Range(func(key, value interface{}) bool {
-		admins = append(admins, value.(*models.Admin))
-		return true
-	})
-
-	// Сериализуем данные
-	data, err := json.MarshalIndent(admins, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to marshal admins: %w", err)
-	}
-
-	// Записываем в файл
-	if err := os.WriteFile(filePath, data, 0644); err != nil {
-		return fmt.Errorf("failed to write admins file: %w", err)
-	}
-
-	return nil
-}
-
-// loadUsers загружает пользователей из файла
 func (fs *Filestorage) loadUsers() error {
 	filePath := filepath.Join(fs.dataDir, UsersFileName)
-
-	// Проверяем, существует ли файл
 	if _, err := os.Stat(filePath); os.IsNotExist(err) {
-		// Файл не существует, создаем пустой файл
-		if err := fs.saveUsers(); err != nil {
-			return err
-		}
-		return nil
+		return fs.saveUsers()
 	}
 
-	// Читаем файл
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		return fmt.Errorf("failed to read users file: %w", err)
 	}
 
-	// Если файл пустой, ничего не делаем
-	if len(data) == 0 {
-		return nil
-	}
-
-	// Десериализуем данные
 	var users []*models.User
 	if err := json.Unmarshal(data, &users); err != nil {
 		return fmt.Errorf("failed to unmarshal users: %w", err)
 	}
 
-	// Сохраняем пользователей в память
 	for _, user := range users {
 		fs.users.Store(user.Id, user)
 	}
@@ -181,221 +97,140 @@ func (fs *Filestorage) loadUsers() error {
 	return nil
 }
 
-// loadTransactions загружает транзакции из файла
-func (fs *Filestorage) loadTransactions() error {
-	filePath := filepath.Join(fs.dataDir, TransactionsFileName)
-
-	// Проверяем, существует ли файл
-	if _, err := os.Stat(filePath); os.IsNotExist(err) {
-		// Файл не существует, создаем пустой файл
-		if err := fs.saveTransactions(); err != nil {
-			return err
-		}
-		return nil
-	}
-
-	// Читаем файл
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		return fmt.Errorf("failed to read transactions file: %w", err)
-	}
-
-	// Если файл пустой, ничего не делаем
-	if len(data) == 0 {
-		return nil
-	}
-
-	// Десериализуем данные
-	var transactions []*models.Transaction
-	if err := json.Unmarshal(data, &transactions); err != nil {
-		return fmt.Errorf("failed to unmarshal transactions: %w", err)
-	}
-
-	// Сохраняем транзакции в память
-	for _, transaction := range transactions {
-		fs.transactions.Store(transaction.Id, transaction)
-	}
-
-	return nil
-}
-
-// loadCodes загружает коды из файла
-func (fs *Filestorage) loadCodes() error {
-	filePath := filepath.Join(fs.dataDir, CodesFileName)
-
-	// Проверяем, существует ли файл
-	if _, err := os.Stat(filePath); os.IsNotExist(err) {
-		// Файл не существует, создаем пустой файл
-		if err := fs.saveCodes(); err != nil {
-			return err
-		}
-		return nil
-	}
-
-	// Читаем файл
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		return fmt.Errorf("failed to read codes file: %w", err)
-	}
-
-	// Если файл пустой, ничего не делаем
-	if len(data) == 0 {
-		return nil
-	}
-
-	// Десериализуем данные
-	var codes []*models.Code
-	if err := json.Unmarshal(data, &codes); err != nil {
-		return fmt.Errorf("failed to unmarshal codes: %w", err)
-	}
-
-	// Сохраняем коды в память
-	for _, code := range codes {
-		fs.codes.Store(code.Code, code)
-	}
-
-	return nil
-}
-
-// loadCodeUsages загружает использования кодов из файла
-func (fs *Filestorage) loadCodeUsages() error {
-	filePath := filepath.Join(fs.dataDir, CodeUsagesFileName)
-
-	// Проверяем, существует ли файл
-	if _, err := os.Stat(filePath); os.IsNotExist(err) {
-		// Файл не существует, создаем пустой файл
-		if err := fs.saveCodeUsages(); err != nil {
-			return err
-		}
-		return nil
-	}
-
-	// Читаем файл
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		return fmt.Errorf("failed to read code usages file: %w", err)
-	}
-
-	// Если файл пустой, ничего не делаем
-	if len(data) == 0 {
-		return nil
-	}
-
-	// Десериализуем данные
-	var codeUsages []*models.CodeUsage
-	if err := json.Unmarshal(data, &codeUsages); err != nil {
-		return fmt.Errorf("failed to unmarshal code usages: %w", err)
-	}
-
-	// Сохраняем использования кодов в память
-	for _, usage := range codeUsages {
-		fs.codeUsages.Store(usage.Id, usage)
-	}
-
-	return nil
-}
-
-// saveUsers сохраняет пользователей в файл
 func (fs *Filestorage) saveUsers() error {
-	filePath := filepath.Join(fs.dataDir, UsersFileName)
-
-	// Собираем всех пользователей
 	var users []*models.User
 	fs.users.Range(func(key, value interface{}) bool {
 		users = append(users, value.(*models.User))
 		return true
 	})
 
-	// Сериализуем данные
 	data, err := json.MarshalIndent(users, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal users: %w", err)
 	}
 
-	// Записываем в файл
-	if err := os.WriteFile(filePath, data, 0644); err != nil {
-		return fmt.Errorf("failed to write users file: %w", err)
+	filePath := filepath.Join(fs.dataDir, UsersFileName)
+	return os.WriteFile(filePath, data, 0644)
+}
+
+func (fs *Filestorage) loadPuzzles() error {
+	filePath := filepath.Join(fs.dataDir, PuzzlesFileName)
+	if _, err := os.Stat(filePath); os.IsNotExist(err) {
+		return fs.savePuzzles()
+	}
+
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return fmt.Errorf("failed to read puzzles file: %w", err)
+	}
+
+	var puzzles []*models.Puzzle
+	if err := json.Unmarshal(data, &puzzles); err != nil {
+		return fmt.Errorf("failed to unmarshal puzzles: %w", err)
+	}
+
+	for _, puzzle := range puzzles {
+		fs.puzzles.Store(puzzle.Id, puzzle)
 	}
 
 	return nil
 }
 
-// saveTransactions сохраняет транзакции в файл
-func (fs *Filestorage) saveTransactions() error {
-	filePath := filepath.Join(fs.dataDir, TransactionsFileName)
-
-	// Собираем все транзакции
-	var transactions []*models.Transaction
-	fs.transactions.Range(func(key, value interface{}) bool {
-		transactions = append(transactions, value.(*models.Transaction))
+func (fs *Filestorage) savePuzzles() error {
+	var puzzles []*models.Puzzle
+	fs.puzzles.Range(func(key, value interface{}) bool {
+		puzzles = append(puzzles, value.(*models.Puzzle))
 		return true
 	})
 
-	// Сериализуем данные
-	data, err := json.MarshalIndent(transactions, "", "  ")
+	data, err := json.MarshalIndent(puzzles, "", "  ")
 	if err != nil {
-		return fmt.Errorf("failed to marshal transactions: %w", err)
+		return fmt.Errorf("failed to marshal puzzles: %w", err)
 	}
 
-	// Записываем в файл
-	if err := os.WriteFile(filePath, data, 0644); err != nil {
-		return fmt.Errorf("failed to write transactions file: %w", err)
+	filePath := filepath.Join(fs.dataDir, PuzzlesFileName)
+	return os.WriteFile(filePath, data, 0644)
+}
+
+func (fs *Filestorage) loadPuzzlePieces() error {
+	filePath := filepath.Join(fs.dataDir, PuzzlePiecesFileName)
+	if _, err := os.Stat(filePath); os.IsNotExist(err) {
+		return fs.savePuzzlePieces()
+	}
+
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return fmt.Errorf("failed to read puzzle pieces file: %w", err)
+	}
+
+	var pieces []*models.PuzzlePiece
+	if err := json.Unmarshal(data, &pieces); err != nil {
+		return fmt.Errorf("failed to unmarshal puzzle pieces: %w", err)
+	}
+
+	for _, piece := range pieces {
+		fs.puzzlePieces.Store(piece.Code, piece)
 	}
 
 	return nil
 }
 
-// saveCodes сохраняет коды в файл
-func (fs *Filestorage) saveCodes() error {
-	filePath := filepath.Join(fs.dataDir, CodesFileName)
-
-	// Собираем все коды
-	var codes []*models.Code
-	fs.codes.Range(func(key, value interface{}) bool {
-		codes = append(codes, value.(*models.Code))
+func (fs *Filestorage) savePuzzlePieces() error {
+	var pieces []*models.PuzzlePiece
+	fs.puzzlePieces.Range(func(key, value interface{}) bool {
+		pieces = append(pieces, value.(*models.PuzzlePiece))
 		return true
 	})
 
-	// Сериализуем данные
-	data, err := json.MarshalIndent(codes, "", "  ")
+	data, err := json.MarshalIndent(pieces, "", "  ")
 	if err != nil {
-		return fmt.Errorf("failed to marshal codes: %w", err)
+		return fmt.Errorf("failed to marshal puzzle pieces: %w", err)
 	}
 
-	// Записываем в файл
-	if err := os.WriteFile(filePath, data, 0644); err != nil {
-		return fmt.Errorf("failed to write codes file: %w", err)
+	filePath := filepath.Join(fs.dataDir, PuzzlePiecesFileName)
+	return os.WriteFile(filePath, data, 0644)
+}
+
+func (fs *Filestorage) loadAdmins() error {
+	filePath := filepath.Join(fs.dataDir, AdminsFileName)
+	if _, err := os.Stat(filePath); os.IsNotExist(err) {
+		return fs.saveAdmins()
+	}
+
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return fmt.Errorf("failed to read admins file: %w", err)
+	}
+
+	var admins []*models.Admin
+	if err := json.Unmarshal(data, &admins); err != nil {
+		return fmt.Errorf("failed to unmarshal admins: %w", err)
+	}
+
+	for _, admin := range admins {
+		fs.admins.Store(admin.ID, admin)
 	}
 
 	return nil
 }
 
-// saveCodeUsages сохраняет использования кодов в файл
-func (fs *Filestorage) saveCodeUsages() error {
-	filePath := filepath.Join(fs.dataDir, CodeUsagesFileName)
-
-	// Собираем все использования кодов
-	var codeUsages []*models.CodeUsage
-	fs.codeUsages.Range(func(key, value interface{}) bool {
-		codeUsages = append(codeUsages, value.(*models.CodeUsage))
+func (fs *Filestorage) saveAdmins() error {
+	var admins []*models.Admin
+	fs.admins.Range(func(key, value interface{}) bool {
+		admins = append(admins, value.(*models.Admin))
 		return true
 	})
 
-	// Сериализуем данные
-	data, err := json.MarshalIndent(codeUsages, "", "  ")
+	data, err := json.MarshalIndent(admins, "", "  ")
 	if err != nil {
-		return fmt.Errorf("failed to marshal code usages: %w", err)
+		return fmt.Errorf("failed to marshal admins: %w", err)
 	}
 
-	// Записываем в файл
-	if err := os.WriteFile(filePath, data, 0644); err != nil {
-		return fmt.Errorf("failed to write code usages file: %w", err)
-	}
-
-	return nil
+	filePath := filepath.Join(fs.dataDir, AdminsFileName)
+	return os.WriteFile(filePath, data, 0644)
 }
 
-// Методы для получения данных
+// ==================== МЕТОДЫ ДЛЯ ПОЛЬЗОВАТЕЛЕЙ ====================
 
 func (fs *Filestorage) GetUser(userId uuid.UUID) (*models.User, error) {
 	userVal, ok := fs.users.Load(userId)
@@ -409,40 +244,25 @@ func (fs *Filestorage) GetUser(userId uuid.UUID) (*models.User, error) {
 	return user, nil
 }
 
-func (fs *Filestorage) GetUserPoints(userId uuid.UUID) (int, error) {
-	userVal, ok := fs.users.Load(userId)
-	if !ok {
-		return 0, errors.New("user not found")
-	}
-	user := userVal.(*models.User)
-	if user.Deleted {
-		return 0, errors.New("user not found")
-	}
-	return user.Points, nil
-}
-
 func (fs *Filestorage) GetUserByTelegramm(telegramm string) (*models.User, error) {
 	var foundUser *models.User
-
 	fs.users.Range(func(key, value interface{}) bool {
 		user := value.(*models.User)
 		if user.Telegramm == telegramm && !user.Deleted {
 			foundUser = user
-			return false // прекращаем итерацию
+			return false
 		}
-		return true // продолжаем итерацию
+		return true
 	})
 
 	if foundUser == nil {
 		return nil, errors.New("user not found")
 	}
-
 	return foundUser, nil
 }
 
 func (fs *Filestorage) GetAllUsers() ([]*models.User, error) {
 	var users []*models.User
-
 	fs.users.Range(func(key, value interface{}) bool {
 		user := value.(*models.User)
 		if !user.Deleted {
@@ -450,122 +270,21 @@ func (fs *Filestorage) GetAllUsers() ([]*models.User, error) {
 		}
 		return true
 	})
-
 	return users, nil
 }
 
-func (fs *Filestorage) GetTransaction(transactionId uuid.UUID) (*models.Transaction, error) {
-	transactionVal, ok := fs.transactions.Load(transactionId)
-	if !ok {
-		return nil, errors.New("transaction not found")
-	}
-	return transactionVal.(*models.Transaction), nil
-}
-
-func (fs *Filestorage) GetUserTransactions(userId uuid.UUID) ([]*models.Transaction, error) {
-	var transactions []*models.Transaction
-
-	fs.transactions.Range(func(key, value interface{}) bool {
-		transaction := value.(*models.Transaction)
-		if transaction.UserId == userId {
-			transactions = append(transactions, transaction)
-		}
-		return true // продолжаем итерацию
-	})
-
-	return transactions, nil
-}
-
-func (fs *Filestorage) GetAllTransactions() ([]*models.Transaction, error) {
-	var transactions []*models.Transaction
-
-	fs.transactions.Range(func(key, value interface{}) bool {
-		transaction := value.(*models.Transaction)
-		transactions = append(transactions, transaction)
-		return true
-	})
-
-	return transactions, nil
-}
-
-func (fs *Filestorage) GetCodeInfo(code uuid.UUID) (*models.Code, error) {
-	codeVal, ok := fs.codes.Load(code)
-	if !ok {
-		return nil, errors.New("code not found")
-	}
-	return codeVal.(*models.Code), nil
-}
-
-func (fs *Filestorage) GetAllCodes() ([]*models.Code, error) {
-	var codes []*models.Code
-
-	fs.codes.Range(func(key, value interface{}) bool {
-		code := value.(*models.Code)
-		codes = append(codes, code)
-		return true
-	})
-
-	return codes, nil
-}
-
-func (fs *Filestorage) GetCodeUsage(code uuid.UUID) ([]*models.CodeUsage, error) {
-	var usages []*models.CodeUsage
-
-	fs.codeUsages.Range(func(key, value interface{}) bool {
-		usage := value.(*models.CodeUsage)
-		if usage.Code == code {
-			usages = append(usages, usage)
-		}
-		return true // продолжаем итерацию
-	})
-
-	return usages, nil
-}
-
-func (fs *Filestorage) GetAllCodeUsages() ([]*models.CodeUsage, error) {
-	var usages []*models.CodeUsage
-
-	fs.codeUsages.Range(func(key, value interface{}) bool {
-		usage := value.(*models.CodeUsage)
-		usages = append(usages, usage)
-		return true
-	})
-
-	return usages, nil
-}
-
-func (fs *Filestorage) GetCodeUsageByUser(code uuid.UUID, userId uuid.UUID) (*models.CodeUsage, error) {
-	var foundUsage *models.CodeUsage
-
-	fs.codeUsages.Range(func(key, value interface{}) bool {
-		usage := value.(*models.CodeUsage)
-		if usage.Code == code && usage.UserId == userId {
-			foundUsage = usage
-			return false // прекращаем итерацию
-		}
-		return true // продолжаем итерацию
-	})
-
-	if foundUsage == nil {
-		return nil, errors.New("code usage not found")
-	}
-
-	return foundUsage, nil
-}
-
-// Методы для добавления данных
-
 func (fs *Filestorage) AddUser(user *models.User) error {
-	// Проверяем, существует ли пользователь с таким Telegram ID
-	var exists bool
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
 
+	var exists bool
 	fs.users.Range(func(key, value interface{}) bool {
 		existingUser := value.(*models.User)
 		if existingUser.Telegramm == user.Telegramm && !existingUser.Deleted {
 			exists = true
-			return false // прекращаем итерацию
+			return false
 		}
-		return true // продолжаем итерацию
+		return true
 	})
 
 	if exists {
@@ -573,225 +292,245 @@ func (fs *Filestorage) AddUser(user *models.User) error {
 	}
 
 	fs.users.Store(user.Id, user)
-
-	// Сохраняем изменения в файл
-	if err := fs.saveUsers(); err != nil {
-		return fmt.Errorf("failed to save users: %w", err)
-	}
-
-	return nil
+	return fs.saveUsers()
 }
-
-func (fs *Filestorage) AddTransaction(transaction *models.Transaction) error {
-	// Проверяем, существует ли пользователь
-	userVal, ok := fs.users.Load(transaction.UserId)
-	if !ok {
-		return errors.New("user not found")
-	}
-
-	user := userVal.(*models.User)
-	if user.Deleted {
-		return errors.New("user not found")
-	}
-
-	// Обновляем баллы пользователя
-	user.Points += transaction.Diff
-	fs.users.Store(user.Id, user)
-
-	// Сохраняем транзакцию
-	fs.transactions.Store(transaction.Id, transaction)
-
-	// Сохраняем изменения в файлы
-	if err := fs.saveUsers(); err != nil {
-		return fmt.Errorf("failed to save users: %w", err)
-	}
-
-	if err := fs.saveTransactions(); err != nil {
-		return fmt.Errorf("failed to save transactions: %w", err)
-	}
-
-	return nil
-}
-
-func (fs *Filestorage) AddCode(code *models.Code) error {
-	// Проверяем, существует ли код с таким ID
-	_, ok := fs.codes.Load(code.Code)
-	if ok {
-		return errors.New("code already exists")
-	}
-
-	fs.codes.Store(code.Code, code)
-
-	// Сохраняем изменения в файл
-	if err := fs.saveCodes(); err != nil {
-		return fmt.Errorf("failed to save codes: %w", err)
-	}
-
-	return nil
-}
-
-func (fs *Filestorage) AddCodeUsage(usage *models.CodeUsage) error {
-	// Проверяем, существует ли пользователь
-	userVal, ok := fs.users.Load(usage.UserId)
-	if !ok {
-		return errors.New("user not found")
-	}
-
-	user := userVal.(*models.User)
-	if user.Deleted {
-		return errors.New("user not found")
-	}
-
-	// Проверяем, существует ли код
-	codeVal, ok := fs.codes.Load(usage.Code)
-	if !ok {
-		return errors.New("code not found")
-	}
-
-	code := codeVal.(*models.Code)
-
-	// Проверяем, активен ли код
-	if !code.IsActive {
-		return errors.New("code is not active")
-	}
-
-	// Проверяем, принадлежит ли пользователь к нужной группе
-	if code.Group != "" && user.Group != code.Group {
-		return errors.New("user group does not match code group")
-	}
-
-	// Проверяем, не превышено ли количество использований кода пользователем
-	existingUsage, err := fs.GetCodeUsageByUser(usage.Code, usage.UserId)
-	if err == nil && code.PerUser > 0 && existingUsage.Count >= code.PerUser {
-		return errors.New("user code usage limit exceeded")
-	}
-
-	// Проверяем, не превышено ли общее количество использований кода
-	if code.Total > 0 && code.AppliedCount >= code.Total {
-		return errors.New("code usage limit exceeded")
-	}
-
-	// Если использование кода пользователем уже существует, обновляем его
-	if err == nil {
-		existingUsage.Count++
-		fs.codeUsages.Store(existingUsage.Id, existingUsage)
-	} else {
-		// Иначе создаем новое использование
-		fs.codeUsages.Store(usage.Id, usage)
-	}
-
-	// Увеличиваем счетчик использований кода
-	code.AppliedCount++
-	fs.codes.Store(code.Code, code)
-
-	// Сохраняем изменения в файлы
-	if err := fs.saveCodes(); err != nil {
-		return fmt.Errorf("failed to save codes: %w", err)
-	}
-
-	if err := fs.saveCodeUsages(); err != nil {
-		return fmt.Errorf("failed to save code usages: %w", err)
-	}
-
-	return nil
-}
-
-// Методы для обновления данных
 
 func (fs *Filestorage) UpdateUser(user *models.User) error {
-	// Проверяем, существует ли пользователь
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
 	_, ok := fs.users.Load(user.Id)
 	if !ok {
 		return errors.New("user not found")
 	}
 
 	fs.users.Store(user.Id, user)
-
-	// Сохраняем изменения в файл
-	if err := fs.saveUsers(); err != nil {
-		return fmt.Errorf("failed to save users: %w", err)
-	}
-
-	return nil
+	return fs.saveUsers()
 }
-
-func (fs *Filestorage) UpdateCode(code *models.Code) error {
-	// Проверяем, существует ли код
-	_, ok := fs.codes.Load(code.Code)
-	if !ok {
-		return errors.New("code not found")
-	}
-
-	fs.codes.Store(code.Code, code)
-
-	// Сохраняем изменения в файл
-	if err := fs.saveCodes(); err != nil {
-		return fmt.Errorf("failed to save codes: %w", err)
-	}
-
-	return nil
-}
-
-func (fs *Filestorage) UpdateCodeUsage(usage *models.CodeUsage) error {
-	// Проверяем, существует ли использование кода
-	_, ok := fs.codeUsages.Load(usage.Id)
-	if !ok {
-		return errors.New("code usage not found")
-	}
-
-	fs.codeUsages.Store(usage.Id, usage)
-
-	// Сохраняем изменения в файл
-	if err := fs.saveCodeUsages(); err != nil {
-		return fmt.Errorf("failed to save code usages: %w", err)
-	}
-
-	return nil
-}
-
-// Методы для удаления данных
 
 func (fs *Filestorage) DeleteUser(userId uuid.UUID) error {
-	// Проверяем, существует ли пользователь
-	userVal, ok := fs.users.Load(userId)
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	_, ok := fs.users.Load(userId)
 	if !ok {
 		return errors.New("user not found")
 	}
 
-	// Помечаем пользователя как удаленного (мягкое удаление)
-	user := userVal.(*models.User)
-	user.Deleted = true
-	fs.users.Store(userId, user)
+	// Освобождаем детали пазлов пользователя
+	fs.puzzlePieces.Range(func(key, value interface{}) bool {
+		piece := value.(*models.PuzzlePiece)
+		if piece.OwnerId != nil && *piece.OwnerId == userId {
+			piece.OwnerId = nil
+			piece.RegisteredAt = nil
+			fs.puzzlePieces.Store(key, piece)
+		}
+		return true
+	})
 
-	// Сохраняем изменения в файл
-	if err := fs.saveUsers(); err != nil {
-		return fmt.Errorf("failed to save users: %w", err)
-	}
-
-	return nil
+	// Удаляем пользователя
+	fs.users.Delete(userId)
+	return fs.saveUsers()
 }
 
-func (fs *Filestorage) DeleteCode(code uuid.UUID) error {
-	// Проверяем, существует ли код
-	codeVal, ok := fs.codes.Load(code)
+// ==================== МЕТОДЫ ДЛЯ ПАЗЛОВ ====================
+
+func (fs *Filestorage) GetPuzzle(puzzleId int) (*models.Puzzle, error) {
+	puzzleVal, ok := fs.puzzles.Load(puzzleId)
 	if !ok {
-		return errors.New("code not found")
+		return nil, errors.New("puzzle not found")
 	}
-
-	// Деактивируем код
-	codeInfo := codeVal.(*models.Code)
-	codeInfo.IsActive = false
-	fs.codes.Store(code, codeInfo)
-
-	// Сохраняем изменения в файл
-	if err := fs.saveCodes(); err != nil {
-		return fmt.Errorf("failed to save codes: %w", err)
-	}
-
-	return nil
+	return puzzleVal.(*models.Puzzle), nil
 }
 
-// Методы для работы с администраторами
+func (fs *Filestorage) GetAllPuzzles() ([]*models.Puzzle, error) {
+	var puzzles []*models.Puzzle
+	fs.puzzles.Range(func(key, value interface{}) bool {
+		puzzles = append(puzzles, value.(*models.Puzzle))
+		return true
+	})
+	return puzzles, nil
+}
+
+func (fs *Filestorage) UpdatePuzzle(puzzle *models.Puzzle) error {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	_, ok := fs.puzzles.Load(puzzle.Id)
+	if !ok {
+		return errors.New("puzzle not found")
+	}
+
+	fs.puzzles.Store(puzzle.Id, puzzle)
+	return fs.savePuzzles()
+}
+
+// ==================== МЕТОДЫ ДЛЯ ДЕТАЛЕЙ ПАЗЛОВ ====================
+
+func (fs *Filestorage) GetPuzzlePiece(code string) (*models.PuzzlePiece, error) {
+	pieceVal, ok := fs.puzzlePieces.Load(code)
+	if !ok {
+		return nil, errors.New("piece not found")
+	}
+	return pieceVal.(*models.PuzzlePiece), nil
+}
+
+func (fs *Filestorage) GetPuzzlePiecesByPuzzle(puzzleId int) ([]*models.PuzzlePiece, error) {
+	var pieces []*models.PuzzlePiece
+	fs.puzzlePieces.Range(func(key, value interface{}) bool {
+		piece := value.(*models.PuzzlePiece)
+		if piece.PuzzleId == puzzleId {
+			pieces = append(pieces, piece)
+		}
+		return true
+	})
+	return pieces, nil
+}
+
+func (fs *Filestorage) GetPuzzlePiecesByOwner(ownerId uuid.UUID) ([]*models.PuzzlePiece, error) {
+	var pieces []*models.PuzzlePiece
+	fs.puzzlePieces.Range(func(key, value interface{}) bool {
+		piece := value.(*models.PuzzlePiece)
+		if piece.OwnerId != nil && *piece.OwnerId == ownerId {
+			pieces = append(pieces, piece)
+		}
+		return true
+	})
+	return pieces, nil
+}
+
+func (fs *Filestorage) GetAllPuzzlePieces() ([]*models.PuzzlePiece, error) {
+	var pieces []*models.PuzzlePiece
+	fs.puzzlePieces.Range(func(key, value interface{}) bool {
+		pieces = append(pieces, value.(*models.PuzzlePiece))
+		return true
+	})
+	return pieces, nil
+}
+
+func (fs *Filestorage) AddPuzzlePiece(piece *models.PuzzlePiece) error {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	_, ok := fs.puzzlePieces.Load(piece.Code)
+	if ok {
+		return errors.New("piece already exists")
+	}
+
+	fs.puzzlePieces.Store(piece.Code, piece)
+	return fs.savePuzzlePieces()
+}
+
+func (fs *Filestorage) AddPuzzlePieces(pieces []*models.PuzzlePiece) error {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	for _, piece := range pieces {
+		fs.puzzlePieces.Store(piece.Code, piece)
+	}
+	return fs.savePuzzlePieces()
+}
+
+func (fs *Filestorage) RegisterPuzzlePiece(code string, ownerId uuid.UUID) (*models.PuzzlePiece, bool, error) {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	pieceVal, ok := fs.puzzlePieces.Load(code)
+	if !ok {
+		return nil, false, errors.New("piece not found")
+	}
+
+	piece := pieceVal.(*models.PuzzlePiece)
+	if piece.OwnerId != nil {
+		return nil, false, errors.New("piece already taken")
+	}
+
+	now := time.Now()
+	piece.OwnerId = &ownerId
+	piece.RegisteredAt = &now
+	fs.puzzlePieces.Store(code, piece)
+
+	// Проверяем, все ли детали пазла розданы
+	pieces, _ := fs.GetPuzzlePiecesByPuzzle(piece.PuzzleId)
+	ownedCount := 0
+	for _, p := range pieces {
+		if p.OwnerId != nil {
+			ownedCount++
+		}
+	}
+
+	allPiecesDistributed := ownedCount == 6
+
+	fs.savePuzzlePieces()
+	return piece, allPiecesDistributed, nil
+}
+
+// CompletePuzzle отмечает пазл как собранный и возвращает владельцев деталей для уведомления
+func (fs *Filestorage) CompletePuzzle(puzzleId int) ([]*models.User, error) {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	puzzleVal, ok := fs.puzzles.Load(puzzleId)
+	if !ok {
+		return nil, errors.New("puzzle not found")
+	}
+
+	puzzle := puzzleVal.(*models.Puzzle)
+	if puzzle.IsCompleted {
+		return nil, errors.New("puzzle already completed")
+	}
+
+	// Отмечаем пазл как завершенный
+	now := time.Now()
+	puzzle.IsCompleted = true
+	puzzle.CompletedAt = &now
+	fs.puzzles.Store(puzzleId, puzzle)
+	fs.savePuzzles()
+
+	// Собираем уникальных владельцев деталей
+	ownerIds := make(map[uuid.UUID]bool)
+	fs.puzzlePieces.Range(func(key, value interface{}) bool {
+		piece := value.(*models.PuzzlePiece)
+		if piece.PuzzleId == puzzleId && piece.OwnerId != nil {
+			ownerIds[*piece.OwnerId] = true
+		}
+		return true
+	})
+
+	var users []*models.User
+	for ownerId := range ownerIds {
+		userVal, ok := fs.users.Load(ownerId)
+		if ok {
+			users = append(users, userVal.(*models.User))
+		}
+	}
+
+	return users, nil
+}
+
+// ==================== МЕТОДЫ ДЛЯ СТАТИСТИКИ ====================
+
+func (fs *Filestorage) GetUserPieceCount(userId uuid.UUID) (int, error) {
+	pieces, _ := fs.GetPuzzlePiecesByOwner(userId)
+	return len(pieces), nil
+}
+
+func (fs *Filestorage) GetUserCompletedPuzzlePieceCount(userId uuid.UUID) (int, error) {
+	pieces, _ := fs.GetPuzzlePiecesByOwner(userId)
+	count := 0
+	for _, piece := range pieces {
+		puzzleVal, ok := fs.puzzles.Load(piece.PuzzleId)
+		if ok {
+			puzzle := puzzleVal.(*models.Puzzle)
+			if puzzle.IsCompleted {
+				count++
+			}
+		}
+	}
+	return count, nil
+}
+
+// ==================== МЕТОДЫ ДЛЯ АДМИНИСТРАТОРОВ ====================
 
 func (fs *Filestorage) GetAdmin(adminId int64) (*models.Admin, error) {
 	adminVal, ok := fs.admins.Load(adminId)
@@ -803,7 +542,6 @@ func (fs *Filestorage) GetAdmin(adminId int64) (*models.Admin, error) {
 
 func (fs *Filestorage) GetAllAdmins() ([]*models.Admin, error) {
 	var admins []*models.Admin
-
 	fs.admins.Range(func(key, value interface{}) bool {
 		admin := value.(*models.Admin)
 		if admin.IsActive {
@@ -811,57 +549,145 @@ func (fs *Filestorage) GetAllAdmins() ([]*models.Admin, error) {
 		}
 		return true
 	})
-
 	return admins, nil
 }
 
 func (fs *Filestorage) AddAdmin(admin *models.Admin) error {
-	// Проверяем, существует ли администратор с таким ID
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
 	_, ok := fs.admins.Load(admin.ID)
 	if ok {
 		return errors.New("admin with this ID already exists")
 	}
 
 	fs.admins.Store(admin.ID, admin)
-
-	// Сохраняем изменения в файл
-	if err := fs.saveAdmins(); err != nil {
-		return fmt.Errorf("failed to save admins: %w", err)
-	}
-
-	return nil
+	return fs.saveAdmins()
 }
 
 func (fs *Filestorage) UpdateAdmin(admin *models.Admin) error {
-	// Проверяем, существует ли администратор
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
 	_, ok := fs.admins.Load(admin.ID)
 	if !ok {
 		return errors.New("admin not found")
 	}
 
 	fs.admins.Store(admin.ID, admin)
-
-	// Сохраняем изменения в файл
-	if err := fs.saveAdmins(); err != nil {
-		return fmt.Errorf("failed to save admins: %w", err)
-	}
-
-	return nil
+	return fs.saveAdmins()
 }
 
 func (fs *Filestorage) DeleteAdmin(adminId int64) error {
-	// Проверяем, существует ли администратор
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
 	_, ok := fs.admins.Load(adminId)
 	if !ok {
 		return errors.New("admin not found")
 	}
 
-	// Удаляем администратора
 	fs.admins.Delete(adminId)
+	return fs.saveAdmins()
+}
 
-	// Сохраняем изменения в файл
-	if err := fs.saveAdmins(); err != nil {
-		return fmt.Errorf("failed to save admins: %w", err)
+// ==================== МЕТОДЫ ДЛЯ УВЕДОМЛЕНИЙ ====================
+
+func (fs *Filestorage) AddNotification(notification *models.Notification) error {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	fs.notifications.Store(notification.Id, notification)
+	return fs.saveNotifications()
+}
+
+func (fs *Filestorage) GetPendingNotifications() ([]*models.Notification, error) {
+	var notifications []*models.Notification
+
+	fs.notifications.Range(func(key, value interface{}) bool {
+		notification := value.(*models.Notification)
+		if notification.Status == models.NotificationPending {
+			notifications = append(notifications, notification)
+		}
+		return true
+	})
+
+	return notifications, nil
+}
+
+func (fs *Filestorage) UpdateNotification(notification *models.Notification) error {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	_, ok := fs.notifications.Load(notification.Id)
+	if !ok {
+		return errors.New("notification not found")
+	}
+
+	fs.notifications.Store(notification.Id, notification)
+	return fs.saveNotifications()
+}
+
+func (fs *Filestorage) GetNotification(id uuid.UUID) (*models.Notification, error) {
+	notificationVal, ok := fs.notifications.Load(id)
+	if !ok {
+		return nil, errors.New("notification not found")
+	}
+	return notificationVal.(*models.Notification), nil
+}
+
+func (fs *Filestorage) GetAllNotifications() ([]*models.Notification, error) {
+	var notifications []*models.Notification
+
+	fs.notifications.Range(func(key, value interface{}) bool {
+		notification := value.(*models.Notification)
+		notifications = append(notifications, notification)
+		return true
+	})
+
+	return notifications, nil
+}
+
+func (fs *Filestorage) saveNotifications() error {
+	var notifications []*models.Notification
+
+	fs.notifications.Range(func(key, value interface{}) bool {
+		notification := value.(*models.Notification)
+		notifications = append(notifications, notification)
+		return true
+	})
+
+	data, err := json.MarshalIndent(notifications, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal notifications: %w", err)
+	}
+
+	filePath := filepath.Join(fs.dataDir, NotificationsFileName)
+	if err := os.WriteFile(filePath, data, 0644); err != nil {
+		return fmt.Errorf("failed to write notifications file: %w", err)
+	}
+
+	return nil
+}
+
+func (fs *Filestorage) loadNotifications() error {
+	filePath := filepath.Join(fs.dataDir, NotificationsFileName)
+
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("failed to read notifications file: %w", err)
+	}
+
+	var notifications []*models.Notification
+	if err := json.Unmarshal(data, &notifications); err != nil {
+		return fmt.Errorf("failed to unmarshal notifications: %w", err)
+	}
+
+	for _, notification := range notifications {
+		fs.notifications.Store(notification.Id, notification)
 	}
 
 	return nil
