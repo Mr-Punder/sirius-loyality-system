@@ -25,6 +25,7 @@
         <div class="header">
             <h1>Детали пазлов</h1>
             <div class="actions">
+                <button @click="exportCompletedPieces" class="btn-success">📥 Экспорт засчитанных</button>
                 <button @click="showImportModal = true">Импорт деталей</button>
                 <button @click="refreshPieces">Обновить</button>
             </div>
@@ -39,6 +40,10 @@
             <div class="stat-card">
                 <div class="stat-value" x-text="registeredPieces"></div>
                 <div class="stat-label">Зарегистрировано</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" x-text="completedPieces"></div>
+                <div class="stat-label">Засчитано</div>
             </div>
             <div class="stat-card">
                 <div class="stat-value" x-text="availablePieces"></div>
@@ -63,6 +68,7 @@
                 <select id="status-filter" x-model="filters.status" @change="applyFilters">
                     <option value="">Все</option>
                     <option value="registered">Зарегистрированные</option>
+                    <option value="completed">Засчитанные</option>
                     <option value="available">Свободные</option>
                 </select>
             </div>
@@ -83,21 +89,22 @@
                         <th class="sortable" :class="getSortClass('piece_number')" @click="sortBy('piece_number')">Деталь №</th>
                         <th class="sortable" :class="getSortClass('owner_name')" @click="sortBy('owner_name')">Владелец</th>
                         <th class="sortable" :class="getSortClass('registered_at')" @click="sortBy('registered_at')">Дата регистрации</th>
+                        <th>Статус</th>
                     </tr>
                 </thead>
                 <tbody>
                     <template x-if="loading">
                         <tr>
-                            <td colspan="5" style="text-align: center;">Загрузка...</td>
+                            <td colspan="6" style="text-align: center;">Загрузка...</td>
                         </tr>
                     </template>
                     <template x-if="!loading && filteredPieces.length === 0">
                         <tr>
-                            <td colspan="5" style="text-align: center;">Нет деталей</td>
+                            <td colspan="6" style="text-align: center;">Нет деталей</td>
                         </tr>
                     </template>
                     <template x-for="piece in filteredPieces" :key="piece.code">
-                        <tr :class="{ 'registered': piece.owner_id }">
+                        <tr :class="{ 'registered': piece.owner_id, 'completed': piece.puzzle_completed }">
                             <td><code x-text="piece.code"></code></td>
                             <td>
                                 <span x-text="piece.puzzle_name || ('Пазл ' + piece.puzzle_id)"></span>
@@ -116,6 +123,17 @@
                                 </template>
                             </td>
                             <td x-text="piece.registered_at ? formatDate(piece.registered_at) : '-'"></td>
+                            <td>
+                                <template x-if="piece.puzzle_completed && piece.owner_id">
+                                    <span class="status-badge completed">✅ Засчитан</span>
+                                </template>
+                                <template x-if="!piece.puzzle_completed && piece.owner_id">
+                                    <span class="status-badge registered">Выдан</span>
+                                </template>
+                                <template x-if="!piece.owner_id">
+                                    <span class="status-badge available">Свободен</span>
+                                </template>
+                            </td>
                         </tr>
                     </template>
                 </tbody>
@@ -279,6 +297,8 @@
                     if (this.filters.status) {
                         if (this.filters.status === 'registered') {
                             result = result.filter(piece => piece.owner_id);
+                        } else if (this.filters.status === 'completed') {
+                            result = result.filter(piece => piece.owner_id && piece.puzzle_completed);
                         } else if (this.filters.status === 'available') {
                             result = result.filter(piece => !piece.owner_id);
                         }
@@ -307,6 +327,8 @@
                     if (this.filters.status) {
                         if (this.filters.status === 'registered') {
                             result = result.filter(piece => piece.owner_id);
+                        } else if (this.filters.status === 'completed') {
+                            result = result.filter(piece => piece.owner_id && piece.puzzle_completed);
                         } else if (this.filters.status === 'available') {
                             result = result.filter(piece => !piece.owner_id);
                         }
@@ -334,6 +356,10 @@
 
                 get availablePieces() {
                     return this.pieces.filter(p => !p.owner_id).length;
+                },
+
+                get completedPieces() {
+                    return this.pieces.filter(p => p.owner_id && p.puzzle_completed).length;
                 },
 
                 prevPage() {
@@ -474,6 +500,49 @@
                         .finally(() => {
                             this.importLoading = false;
                         });
+                },
+
+                exportCompletedPieces() {
+                    // Фильтруем засчитанные детали с владельцами
+                    const completedPieces = this.pieces
+                        .filter(p => p.owner_id && p.puzzle_completed)
+                        .sort((a, b) => {
+                            // Сначала сортируем по пазлу, потом по номеру детали
+                            if (a.puzzle_id !== b.puzzle_id) return a.puzzle_id - b.puzzle_id;
+                            return a.piece_number - b.piece_number;
+                        });
+
+                    if (completedPieces.length === 0) {
+                        alert('Нет засчитанных деталей для экспорта');
+                        return;
+                    }
+
+                    // Формируем текст
+                    let text = 'Список засчитанных деталей\n';
+                    text += '=' .repeat(50) + '\n\n';
+
+                    let num = 1;
+                    for (const piece of completedPieces) {
+                        const puzzleName = piece.puzzle_name || ('Пазл ' + piece.puzzle_id);
+                        text += `${num}. ${piece.owner_name}\n`;
+                        text += `   Пазл: ${puzzleName} (#${piece.puzzle_id})\n`;
+                        text += `   Код: ${piece.code}, Деталь №${piece.piece_number}\n\n`;
+                        num++;
+                    }
+
+                    text += '=' .repeat(50) + '\n';
+                    text += `Всего засчитанных деталей: ${completedPieces.length}\n`;
+
+                    // Скачиваем как файл
+                    const blob = new Blob([text], { type: 'text/plain; charset=utf-8' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = 'completed_pieces.txt';
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
                 }
             };
         }
@@ -509,6 +578,41 @@
 
         tr.registered {
             background: #f0fff4;
+        }
+
+        tr.completed {
+            background: #e8f5e9;
+        }
+
+        .status-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 0.8rem;
+            font-weight: 500;
+        }
+
+        .status-badge.completed {
+            background: #c8e6c9;
+            color: #2e7d32;
+        }
+
+        .status-badge.registered {
+            background: #fff3e0;
+            color: #ef6c00;
+        }
+
+        .status-badge.available {
+            background: #e3f2fd;
+            color: #1565c0;
+        }
+
+        .btn-success {
+            background: #28a745;
+        }
+
+        .btn-success:hover {
+            background: #218838;
         }
 
         code {

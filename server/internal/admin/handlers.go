@@ -64,13 +64,14 @@ type UsersResponse struct {
 
 // PieceResponse представляет ответ с информацией о детали пазла
 type PieceResponse struct {
-	Code         string     `json:"code"`
-	PuzzleId     int        `json:"puzzle_id"`
-	PuzzleName   string     `json:"puzzle_name"`
-	PieceNumber  int        `json:"piece_number"`
-	OwnerId      *uuid.UUID `json:"owner_id,omitempty"`
-	OwnerName    string     `json:"owner_name,omitempty"`
-	RegisteredAt *time.Time `json:"registered_at,omitempty"`
+	Code            string     `json:"code"`
+	PuzzleId        int        `json:"puzzle_id"`
+	PuzzleName      string     `json:"puzzle_name"`
+	PieceNumber     int        `json:"piece_number"`
+	OwnerId         *uuid.UUID `json:"owner_id,omitempty"`
+	OwnerName       string     `json:"owner_name,omitempty"`
+	RegisteredAt    *time.Time `json:"registered_at,omitempty"`
+	PuzzleCompleted bool       `json:"puzzle_completed"`
 }
 
 // PiecesResponse представляет ответ со списком деталей пазлов
@@ -632,7 +633,7 @@ func (ah *AdminHandler) handlePieces(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Получаем все пазлы для маппинга id -> name
+	// Получаем все пазлы для маппинга id -> name и id -> is_completed
 	puzzles, err := ah.store.GetAllPuzzles()
 	if err != nil {
 		ah.logger.Errorf("Ошибка получения пазлов: %v", err)
@@ -640,8 +641,10 @@ func (ah *AdminHandler) handlePieces(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	puzzleNames := make(map[int]string)
+	puzzleCompleted := make(map[int]bool)
 	for _, p := range puzzles {
 		puzzleNames[p.Id] = p.Name
+		puzzleCompleted[p.Id] = p.IsCompleted
 	}
 
 	// Получаем всех пользователей для маппинга id -> name
@@ -689,12 +692,13 @@ func (ah *AdminHandler) handlePieces(w http.ResponseWriter, r *http.Request) {
 	var pieceResponses []PieceResponse
 	for _, piece := range filteredPieces {
 		resp := PieceResponse{
-			Code:         piece.Code,
-			PuzzleId:     piece.PuzzleId,
-			PuzzleName:   puzzleNames[piece.PuzzleId],
-			PieceNumber:  piece.PieceNumber,
-			OwnerId:      piece.OwnerId,
-			RegisteredAt: piece.RegisteredAt,
+			Code:            piece.Code,
+			PuzzleId:        piece.PuzzleId,
+			PuzzleName:      puzzleNames[piece.PuzzleId],
+			PieceNumber:     piece.PieceNumber,
+			OwnerId:         piece.OwnerId,
+			RegisteredAt:    piece.RegisteredAt,
+			PuzzleCompleted: puzzleCompleted[piece.PuzzleId],
 		}
 		if piece.OwnerId != nil {
 			resp.OwnerName = userNames[*piece.OwnerId]
