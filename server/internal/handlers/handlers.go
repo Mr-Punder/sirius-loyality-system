@@ -427,15 +427,46 @@ func (h *Handler) GetPuzzlesHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Формируем ответ с количеством розданных деталей
+	type PuzzleWithProgress struct {
+		Id          int        `json:"id"`
+		Name        string     `json:"name"`
+		IsCompleted bool       `json:"is_completed"`
+		CompletedAt *time.Time `json:"completed_at,omitempty"`
+		OwnedPieces int        `json:"owned_pieces"`
+		TotalPieces int        `json:"total_pieces"`
+	}
+
+	var puzzlesWithProgress []PuzzleWithProgress
+	for _, puzzle := range puzzles {
+		// Получаем детали пазла для подсчета прогресса
+		pieces, _ := h.storage.GetPuzzlePiecesByPuzzle(puzzle.Id)
+		ownedCount := 0
+		for _, p := range pieces {
+			if p.OwnerId != nil {
+				ownedCount++
+			}
+		}
+
+		puzzlesWithProgress = append(puzzlesWithProgress, PuzzleWithProgress{
+			Id:          puzzle.Id,
+			Name:        puzzle.Name,
+			IsCompleted: puzzle.IsCompleted,
+			CompletedAt: puzzle.CompletedAt,
+			OwnedPieces: ownedCount,
+			TotalPieces: len(pieces),
+		})
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 
 	response := struct {
-		Total   int              `json:"total"`
-		Puzzles []*models.Puzzle `json:"puzzles"`
+		Total   int                  `json:"total"`
+		Puzzles []PuzzleWithProgress `json:"puzzles"`
 	}{
-		Total:   len(puzzles),
-		Puzzles: puzzles,
+		Total:   len(puzzlesWithProgress),
+		Puzzles: puzzlesWithProgress,
 	}
 
 	if err := json.NewEncoder(w).Encode(response); err != nil {

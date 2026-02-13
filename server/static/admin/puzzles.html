@@ -117,9 +117,15 @@
                                 <span class="status-badge" :class="getStatusClass(puzzle)" x-text="getStatusText(puzzle)"></span>
                             </td>
                             <td x-text="puzzle.completed_at ? formatDate(puzzle.completed_at) : '-'"></td>
-                            <td>
+                            <td class="actions-cell">
                                 <button @click="openEditModal(puzzle)" class="btn-small btn-edit">Изменить</button>
                                 <button @click="viewPieces(puzzle.id)" class="btn-small">Детали</button>
+                                <button
+                                    @click="completePuzzle(puzzle)"
+                                    class="btn-small btn-complete"
+                                    :disabled="puzzle.is_completed || puzzle.owned_pieces < 6"
+                                    :title="puzzle.owned_pieces < 6 ? 'Не все детали розданы (' + puzzle.owned_pieces + '/6)' : (puzzle.is_completed ? 'Уже засчитан' : 'Засчитать пазл')"
+                                >Засчитать</button>
                             </td>
                         </tr>
                     </template>
@@ -355,6 +361,46 @@
                     .catch(error => {
                         alert('Ошибка: ' + error.message);
                     });
+                },
+
+                completePuzzle(puzzle) {
+                    if (puzzle.is_completed) {
+                        alert('Пазл уже засчитан');
+                        return;
+                    }
+
+                    const puzzleName = puzzle.name || `Пазл #${puzzle.id}`;
+                    if (!confirm(`Засчитать "${puzzleName}"?\n\nВладельцы деталей получат уведомление.`)) {
+                        return;
+                    }
+
+                    const token = localStorage.getItem('admin_token');
+
+                    fetch(`/puzzles/${puzzle.id}/complete`, {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': `Bearer ${token}`
+                        }
+                    })
+                    .then(response => {
+                        if (!response.ok) {
+                            return response.json().then(data => {
+                                throw new Error(data.error || 'Ошибка засчитывания пазла');
+                            });
+                        }
+                        return response.json();
+                    })
+                    .then(data => {
+                        // Обновляем пазл в списке
+                        puzzle.is_completed = true;
+                        puzzle.completed_at = new Date().toISOString();
+
+                        const ownersCount = data.owners ? data.owners.length : 0;
+                        alert(`Пазл "${puzzleName}" засчитан!\n\nУведомление отправлено ${ownersCount} участникам.`);
+                    })
+                    .catch(error => {
+                        alert('Ошибка: ' + error.message);
+                    });
                 }
             };
         }
@@ -455,6 +501,29 @@
 
         .btn-edit:hover {
             background: #5a6268;
+        }
+
+        .btn-complete {
+            background: #28a745;
+            color: white;
+            border: none;
+            cursor: pointer;
+            border-radius: 4px;
+            margin-left: 4px;
+        }
+
+        .btn-complete:hover {
+            background: #218838;
+        }
+
+        .btn-complete:disabled {
+            background: #6c757d;
+            cursor: not-allowed;
+            opacity: 0.6;
+        }
+
+        .actions-cell {
+            white-space: nowrap;
         }
 
         .puzzle-name {

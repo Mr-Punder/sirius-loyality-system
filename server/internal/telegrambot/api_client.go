@@ -128,12 +128,6 @@ func (c *APIClient) Post(path string, data interface{}) ([]byte, error) {
 	}
 	defer resp.Body.Close()
 
-	// Проверяем код ответа
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("ошибка API (%d): %s", resp.StatusCode, string(body))
-	}
-
 	// Проверяем, сжат ли ответ
 	var reader io.ReadCloser
 	switch resp.Header.Get("Content-Encoding") {
@@ -151,6 +145,16 @@ func (c *APIClient) Post(path string, data interface{}) ([]byte, error) {
 	body, err := io.ReadAll(reader)
 	if err != nil {
 		return nil, fmt.Errorf("ошибка чтения ответа: %w", err)
+	}
+
+	// Для 4xx ошибок возвращаем тело (чтобы можно было распарсить error_code)
+	if resp.StatusCode >= 400 && resp.StatusCode < 500 {
+		return body, nil
+	}
+
+	// Для других ошибок (5xx) возвращаем ошибку
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		return nil, fmt.Errorf("ошибка API (%d): %s", resp.StatusCode, string(body))
 	}
 
 	return body, nil

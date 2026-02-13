@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/MrPunder/sirius-loyality-system/internal/logger"
+	"github.com/MrPunder/sirius-loyality-system/internal/messages"
 	"github.com/MrPunder/sirius-loyality-system/internal/models"
 	"github.com/MrPunder/sirius-loyality-system/internal/storage"
 	tele "gopkg.in/telebot.v3"
@@ -129,40 +130,28 @@ func (ub *UserBot) handleEnterCodeButton(c tele.Context) error {
 	// Проверяем блокировку за спам
 	if ub.isUserBlocked(c.Sender().ID) {
 		remaining := ub.getBlockTimeRemaining(c.Sender().ID)
-		return c.Send(fmt.Sprintf("Слишком много неудачных попыток. Попробуй через %d минут.", int(remaining.Minutes())+1))
+		return c.Send(messages.TooManyAttemptsMsg(remaining))
 	}
 
 	// Проверяем, зарегистрирован ли пользователь
 	user, err := ub.getUser(c.Sender().ID)
 	if err != nil {
 		ub.logger.Errorf("Ошибка получения пользователя: %v", err)
-		return c.Send("Произошла ошибка при проверке регистрации. Пожалуйста, попробуй позже.")
+		return c.Send(messages.ErrCheckRegistration)
 	}
 
 	if user == nil {
-		return c.Send("Ты не зарегистрирован в системе. Используй кнопку 'Регистрация' для регистрации.")
+		return c.Send(messages.UserNotRegistered)
 	}
 
 	// Отправляем сообщение с инструкцией
-	return c.Send("Отправь мне код детали пазла (7 символов, например: PY1GG7H).")
+	return c.Send(messages.UserEnterPieceCode)
 }
 
 // handleHelpButton обрабатывает нажатие на кнопку "Помощь"
 func (ub *UserBot) handleHelpButton(c tele.Context) error {
 	ub.logger.Infof("Пользователь %d нажал на кнопку 'Помощь'", c.Sender().ID)
-
-	message := "Я бот системы пазлов. Вот что я умею:\n\n" +
-		"- Регистрация в системе\n" +
-		"- Просмотр собранных деталей\n" +
-		"- Регистрация деталей пазлов по коду\n\n" +
-		"Как это работает:\n" +
-		"1. Получи деталь пазла и введи её код\n" +
-		"2. Найди других участников с деталями твоего пазла\n" +
-		"3. Соберите пазл вместе и покажите организаторам\n" +
-		"4. Организаторы засчитают пазл, и вы все участвуете в розыгрыше!\n\n" +
-		"Используй кнопки внизу экрана для навигации."
-
-	return c.Send(message)
+	return c.Send(messages.UserHelpMessage)
 }
 
 // handleRegisterButton обрабатывает нажатие на кнопку "Регистрация"
@@ -192,29 +181,29 @@ func (ub *UserBot) createRegistrationKeyboard(withSkip bool) *tele.ReplyMarkup {
 func (ub *UserBot) handleSkipButton(c tele.Context) error {
 	state, exists := ub.registrationStates[c.Sender().ID]
 	if !exists {
-		return c.Send("Ты не находишься в процессе регистрации. Используй /register для начала регистрации.")
+		return c.Send(messages.RegNotInProgressUseCommand)
 	}
 
 	if state.Step == RegistrationStepMiddleName {
 		state.MiddleName = ""
 		state.Step = RegistrationStepGroup
 		keyboard := ub.createRegistrationKeyboard(false)
-		return c.Send("Введи свою группу (Н1-Н6):", keyboard)
+		return c.Send(messages.RegEnterGroup, keyboard)
 	}
 
-	return c.Send("На данном этапе нельзя пропустить ввод.")
+	return c.Send(messages.RegCannotSkip)
 }
 
 // handleCancelButton обрабатывает нажатие на кнопку "Отменить"
 func (ub *UserBot) handleCancelButton(c tele.Context) error {
 	_, exists := ub.registrationStates[c.Sender().ID]
 	if !exists {
-		return c.Send("Ты не находишься в процессе регистрации.")
+		return c.Send(messages.RegNotInProgress)
 	}
 
 	delete(ub.registrationStates, c.Sender().ID)
 	keyboard := ub.createMainKeyboard(false)
-	return c.Send("Регистрация отменена.", keyboard)
+	return c.Send(messages.RegCancelled, keyboard)
 }
 
 // Stop останавливает бота
@@ -256,7 +245,7 @@ func (ub *UserBot) handleStart(c tele.Context) error {
 	user, err := ub.getUser(c.Sender().ID)
 	if err != nil {
 		ub.logger.Errorf("Ошибка получения пользователя: %v", err)
-		return c.Send("Произошла ошибка при проверке регистрации. Пожалуйста, попробуй позже.")
+		return c.Send(messages.ErrCheckRegistration)
 	}
 
 	var keyboard *tele.ReplyMarkup
@@ -264,10 +253,10 @@ func (ub *UserBot) handleStart(c tele.Context) error {
 
 	if user != nil {
 		keyboard = ub.createMainKeyboard(true)
-		message = fmt.Sprintf("Привет, %s! Ты уже зарегистрирован в системе. Используй кнопки для навигации.", user.FirstName)
+		message = messages.UserWelcome(user.FirstName)
 	} else {
 		keyboard = ub.createMainKeyboard(false)
-		message = "Привет! Я бот системы пазлов. Для начала работы тебе нужно зарегистрироваться."
+		message = messages.UserWelcomeUnregistered
 	}
 
 	return c.Send(message, keyboard)
@@ -280,12 +269,12 @@ func (ub *UserBot) handleRegister(c tele.Context) error {
 	user, err := ub.getUser(c.Sender().ID)
 	if err != nil {
 		ub.logger.Errorf("Ошибка получения пользователя: %v", err)
-		return c.Send("Произошла ошибка при проверке регистрации. Пожалуйста, попробуй позже.")
+		return c.Send(messages.ErrCheckRegistration)
 	}
 
 	if user != nil {
 		keyboard := ub.createMainKeyboard(true)
-		return c.Send(fmt.Sprintf("Ты уже зарегистрирован в системе как %s %s.", user.FirstName, user.LastName), keyboard)
+		return c.Send(messages.UserAlreadyRegisteredMsg(user.FirstName, user.LastName), keyboard)
 	}
 
 	ub.registrationStates[c.Sender().ID] = &RegistrationState{
@@ -293,7 +282,7 @@ func (ub *UserBot) handleRegister(c tele.Context) error {
 	}
 
 	keyboard := ub.createRegistrationKeyboard(false)
-	return c.Send("Для регистрации введи свою фамилию:", keyboard)
+	return c.Send(messages.RegEnterLastName, keyboard)
 }
 
 // handlePieces обрабатывает команду /pieces
@@ -303,19 +292,19 @@ func (ub *UserBot) handlePieces(c tele.Context) error {
 	user, err := ub.getUser(c.Sender().ID)
 	if err != nil {
 		ub.logger.Errorf("Ошибка получения пользователя: %v", err)
-		return c.Send("Произошла ошибка при получении деталей. Пожалуйста, попробуй позже.")
+		return c.Send(messages.ErrGetPieces)
 	}
 
 	if user == nil {
 		keyboard := ub.createMainKeyboard(false)
-		return c.Send("Ты не зарегистрирован в системе. Используй кнопку 'Регистрация' для регистрации.", keyboard)
+		return c.Send(messages.UserNotRegistered, keyboard)
 	}
 
 	// Получаем детали пользователя через API
 	piecesData, err := ub.apiClient.Get(fmt.Sprintf("/users/%s/pieces", user.Id), nil)
 	if err != nil {
 		ub.logger.Errorf("Ошибка получения деталей через API: %v", err)
-		return c.Send("Произошла ошибка при получении деталей. Пожалуйста, попробуй позже.")
+		return c.Send(messages.ErrGetPieces)
 	}
 
 	var piecesResponse struct {
@@ -324,13 +313,13 @@ func (ub *UserBot) handlePieces(c tele.Context) error {
 	}
 	if err := json.Unmarshal(piecesData, &piecesResponse); err != nil {
 		ub.logger.Errorf("Ошибка декодирования ответа API: %v", err)
-		return c.Send("Произошла ошибка при получении деталей. Пожалуйста, попробуй позже.")
+		return c.Send(messages.ErrGetPieces)
 	}
 
 	keyboard := ub.createMainKeyboard(true)
 
 	if piecesResponse.Total == 0 {
-		return c.Send("У тебя пока нет зарегистрированных деталей.", keyboard)
+		return c.Send(messages.UserNoPieces, keyboard)
 	}
 
 	// Группируем детали по пазлам
@@ -339,11 +328,11 @@ func (ub *UserBot) handlePieces(c tele.Context) error {
 		puzzlePieces[piece.PuzzleId] = append(puzzlePieces[piece.PuzzleId], piece)
 	}
 
-	message := fmt.Sprintf("У тебя %d деталей:\n\n", piecesResponse.Total)
+	message := messages.UserPiecesListHeader(piecesResponse.Total)
 	for puzzleId, pieces := range puzzlePieces {
-		message += fmt.Sprintf("Пазл #%d: %d деталей\n", puzzleId, len(pieces))
+		message += messages.UserPuzzlePiecesInfo(puzzleId, len(pieces))
 		for _, piece := range pieces {
-			message += fmt.Sprintf("  - Деталь %d (код: %s)\n", piece.PieceNumber, piece.Code)
+			message += messages.UserPieceInfo(piece.PieceNumber, piece.Code)
 		}
 	}
 
@@ -369,7 +358,7 @@ func (ub *UserBot) handleText(c tele.Context) error {
 	user, err := ub.getUser(c.Sender().ID)
 	if err != nil {
 		ub.logger.Errorf("Ошибка получения пользователя: %v", err)
-		return c.Send("Произошла ошибка. Пожалуйста, попробуй позже.")
+		return c.Send(messages.ErrGeneral)
 	}
 
 	var keyboard *tele.ReplyMarkup
@@ -379,7 +368,12 @@ func (ub *UserBot) handleText(c tele.Context) error {
 		keyboard = ub.createMainKeyboard(false)
 	}
 
-	return c.Send("Я не понимаю это сообщение. Используй кнопки для навигации.", keyboard)
+	// Проверяем, похоже ли на попытку ввода кода (короткая строка без пробелов)
+	if looksLikeCodeAttempt(text) {
+		return c.Send(messages.PieceInvalidCodeFormat, keyboard)
+	}
+
+	return c.Send(messages.UnknownMessage, keyboard)
 }
 
 // handleRegistrationStep обрабатывает шаги регистрации
@@ -395,25 +389,25 @@ func (ub *UserBot) handleRegistrationStep(c tele.Context, text string, state *Re
 		state.LastName = text
 		state.Step = RegistrationStepFirstName
 		keyboard := ub.createRegistrationKeyboard(false)
-		return c.Send("Теперь введи своё имя:", keyboard)
+		return c.Send(messages.RegEnterFirstName, keyboard)
 
 	case RegistrationStepFirstName:
 		state.FirstName = text
 		state.Step = RegistrationStepMiddleName
 		keyboard := ub.createRegistrationKeyboard(true)
-		return c.Send("Введи своё отчество (или нажми кнопку 'Пропустить'):", keyboard)
+		return c.Send(messages.RegEnterMiddleName, keyboard)
 
 	case RegistrationStepMiddleName:
 		state.MiddleName = text
 		state.Step = RegistrationStepGroup
 		keyboard := ub.createRegistrationKeyboard(false)
-		return c.Send("Введи свою группу (Н1-Н6):", keyboard)
+		return c.Send(messages.RegEnterGroup, keyboard)
 
 	case RegistrationStepGroup:
 		normalizedGroup, valid := NormalizeGroupName(text)
 		if !valid {
 			keyboard := ub.createRegistrationKeyboard(false)
-			return c.Send("Неверный формат группы. Группа должна быть от Н1 до Н6 (или H1 до H6).", keyboard)
+			return c.Send(messages.InvalidGroupFormat, keyboard)
 		}
 
 		state.Group = normalizedGroup
@@ -423,12 +417,12 @@ func (ub *UserBot) handleRegistrationStep(c tele.Context, text string, state *Re
 		user, err := ub.getUser(c.Sender().ID)
 		if err != nil {
 			ub.logger.Errorf("Ошибка получения пользователя: %v", err)
-			return c.Send("Произошла ошибка при регистрации. Пожалуйста, попробуй позже.")
+			return c.Send(messages.ErrRegistration)
 		}
 
 		if user != nil {
 			delete(ub.registrationStates, c.Sender().ID)
-			return c.Send(fmt.Sprintf("Ты уже зарегистрирован в системе как %s %s.", user.FirstName, user.LastName))
+			return c.Send(messages.UserAlreadyRegisteredMsg(user.FirstName, user.LastName))
 		}
 
 		// Добавляем пользователя через API
@@ -441,19 +435,13 @@ func (ub *UserBot) handleRegistrationStep(c tele.Context, text string, state *Re
 		})
 		if err != nil {
 			ub.logger.Errorf("Ошибка добавления пользователя через API: %v", err)
-			return c.Send("Произошла ошибка при регистрации. Пожалуйста, попробуй позже.")
+			return c.Send(messages.ErrRegistration)
 		}
 
 		delete(ub.registrationStates, c.Sender().ID)
 		keyboard := ub.createMainKeyboard(true)
 
-		successMessage := fmt.Sprintf("Ты успешно зарегистрирован как %s %s", state.LastName, state.FirstName)
-		if state.MiddleName != "" {
-			successMessage += fmt.Sprintf(" %s", state.MiddleName)
-		}
-		successMessage += fmt.Sprintf(" в группе %s.", state.Group)
-
-		return c.Send(successMessage, keyboard)
+		return c.Send(messages.UserRegSuccess(state.LastName, state.FirstName, state.MiddleName, state.Group), keyboard)
 	}
 
 	return nil
@@ -466,18 +454,18 @@ func (ub *UserBot) handlePieceCode(c tele.Context, code string) error {
 	// Проверяем блокировку за спам
 	if ub.isUserBlocked(c.Sender().ID) {
 		remaining := ub.getBlockTimeRemaining(c.Sender().ID)
-		return c.Send(fmt.Sprintf("Слишком много неудачных попыток. Попробуй через %d минут.", int(remaining.Minutes())+1))
+		return c.Send(messages.TooManyAttemptsMsg(remaining))
 	}
 
 	// Получаем пользователя
 	user, err := ub.getUser(c.Sender().ID)
 	if err != nil {
 		ub.logger.Errorf("Ошибка получения пользователя: %v", err)
-		return c.Send("Произошла ошибка при регистрации детали. Пожалуйста, попробуй позже.")
+		return c.Send(messages.ErrRegisterPiece)
 	}
 
 	if user == nil {
-		return c.Send("Ты не зарегистрирован в системе. Используй /register для регистрации.")
+		return c.Send(messages.UserNotRegisteredUseCommand)
 	}
 
 	// Нормализуем код (приводим к верхнему регистру)
@@ -490,50 +478,39 @@ func (ub *UserBot) handlePieceCode(c tele.Context, code string) error {
 
 	if err != nil {
 		ub.logger.Errorf("Ошибка регистрации детали через API: %v", err)
-
-		// Увеличиваем счетчик неудачных попыток
-		ub.recordFailedAttempt(c.Sender().ID)
-
-		attemptsLeft := MaxFailedAttempts - ub.getFailedAttemptCount(c.Sender().ID)
-		if attemptsLeft <= 0 {
-			return c.Send(fmt.Sprintf("Деталь не найдена. Слишком много неудачных попыток. Попробуй через %d минут.", int(BlockDuration.Minutes())))
-		}
-
-		return c.Send(fmt.Sprintf("Деталь не найдена. Осталось попыток: %d", attemptsLeft))
+		return c.Send(messages.ErrRegisterPiece)
 	}
 
 	// Декодируем ответ
 	var registerResponse struct {
-		Success         bool               `json:"success"`
+		Success         bool                `json:"success"`
 		Piece           *models.PuzzlePiece `json:"piece"`
-		PuzzleCompleted bool               `json:"puzzle_completed"`
-		Error           string             `json:"error"`
-		ErrorCode       int                `json:"error_code"`
+		PuzzleCompleted bool                `json:"puzzle_completed"`
+		Error           string              `json:"error"`
+		ErrorCode       int                 `json:"error_code"`
 	}
 	if err := json.Unmarshal(registerData, &registerResponse); err != nil {
 		ub.logger.Errorf("Ошибка декодирования ответа API: %v", err)
-		return c.Send("Произошла ошибка при регистрации детали. Пожалуйста, попробуй позже.")
+		return c.Send(messages.ErrRegisterPiece)
 	}
 
 	if !registerResponse.Success {
-		// Обрабатываем ошибку
-		ub.recordFailedAttempt(c.Sender().ID)
-
-		errorMsg := "Не удалось зарегистрировать деталь."
+		// Обрабатываем ошибку в зависимости от кода
 		switch registerResponse.ErrorCode {
 		case models.PieceErrorNotFound:
+			ub.recordFailedAttempt(c.Sender().ID)
 			attemptsLeft := MaxFailedAttempts - ub.getFailedAttemptCount(c.Sender().ID)
 			if attemptsLeft <= 0 {
-				return c.Send(fmt.Sprintf("Деталь не найдена. Слишком много неудачных попыток. Попробуй через %d минут.", int(BlockDuration.Minutes())))
+				return c.Send(messages.PieceNotFoundBlockedMsg(int(BlockDuration.Minutes())))
 			}
-			errorMsg = fmt.Sprintf("Деталь не найдена. Осталось попыток: %d", attemptsLeft)
+			return c.Send(messages.PieceNotFoundMsg(attemptsLeft))
 		case models.PieceErrorAlreadyTaken:
 			// Это не считается неудачной попыткой для анти-спама
 			ub.clearFailedAttempts(c.Sender().ID)
-			errorMsg = "Эта деталь уже зарегистрирована."
+			return c.Send(messages.PieceAlreadyRegistered)
+		default:
+			return c.Send(messages.PieceRegisterFailed)
 		}
-
-		return c.Send(errorMsg)
 	}
 
 	// Успешная регистрация - сбрасываем счетчик неудачных попыток
@@ -541,14 +518,11 @@ func (ub *UserBot) handlePieceCode(c tele.Context, code string) error {
 
 	keyboard := ub.createMainKeyboard(true)
 
-	message := fmt.Sprintf("Деталь успешно зарегистрирована!\n"+
-		"Пазл #%d, деталь %d", registerResponse.Piece.PuzzleId, registerResponse.Piece.PieceNumber)
-
-	if registerResponse.PuzzleCompleted {
-		message += fmt.Sprintf("\n\n🧩 Все 6 деталей пазла #%d розданы!\n"+
-			"Найди остальных участников с деталями этого пазла, соберите его вместе и покажите организаторам для засчитывания.",
-			registerResponse.Piece.PuzzleId)
-	}
+	message := messages.PieceRegisteredSuccessMsg(
+		registerResponse.Piece.PuzzleId,
+		registerResponse.Piece.PieceNumber,
+		registerResponse.PuzzleCompleted,
+	)
 
 	return c.Send(message, keyboard)
 }
@@ -586,6 +560,29 @@ func isPieceCode(s string) bool {
 	}
 	matched, _ := regexp.MatchString(`^[A-Za-z0-9]{7}$`, s)
 	return matched
+}
+
+// looksLikeCodeAttempt проверяет, похоже ли сообщение на попытку ввести код
+// (короткая строка без пробелов, преимущественно буквы/цифры)
+func looksLikeCodeAttempt(s string) bool {
+	s = strings.TrimSpace(s)
+	// Если содержит пробелы — это не код
+	if strings.Contains(s, " ") {
+		return false
+	}
+	// Если слишком длинная или слишком короткая — не похоже на код
+	if len(s) < 4 || len(s) > 10 {
+		return false
+	}
+	// Проверяем, что состоит в основном из букв и цифр
+	alphanumCount := 0
+	for _, c := range s {
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') {
+			alphanumCount++
+		}
+	}
+	// Если больше половины символов — буквы/цифры, похоже на код
+	return alphanumCount > len(s)/2
 }
 
 // normalizeCode приводит код к верхнему регистру и обрезает пробелы

@@ -547,6 +547,44 @@
             </button>
         </div>
 
+        <!-- Личное сообщение -->
+        <div class="form-card">
+            <h3>Личное сообщение</h3>
+            <div class="form-group">
+                <label for="dm_telegram_id">Telegram ID</label>
+                <input type="text" id="dm_telegram_id" x-model="directMessage.telegramId" placeholder="Например: 123456789">
+            </div>
+            <div class="form-group">
+                <label for="dm_message">Сообщение</label>
+                <textarea id="dm_message" x-model="directMessage.message" placeholder="Введите текст сообщения..."></textarea>
+            </div>
+            <div class="form-group">
+                <label>Вложения из библиотеки</label>
+                <div class="file-list" x-show="selectedDmFiles.length > 0">
+                    <template x-for="fileId in selectedDmFiles" :key="fileId">
+                        <span class="file-tag">
+                            <span x-text="getLibraryFilename(fileId)"></span>
+                            <span class="remove" @click="toggleDmFile(fileId)">&times;</span>
+                        </span>
+                    </template>
+                </div>
+                <div x-show="selectedDmFiles.length === 0" style="color: #999; font-size: 13px;">
+                    Выберите файлы из библиотеки выше (чекбокс + Shift для ЛС)
+                </div>
+                <div style="margin-top: 0.5rem;">
+                    <select @change="if($event.target.value) { toggleDmFile($event.target.value); $event.target.value=''; }">
+                        <option value="">+ Добавить файл из библиотеки</option>
+                        <template x-for="file in library" :key="file.id">
+                            <option :value="file.id" x-text="file.filename" :disabled="selectedDmFiles.includes(file.id)"></option>
+                        </template>
+                    </select>
+                </div>
+            </div>
+            <button class="btn-primary" @click="sendDirectMessage()" :disabled="!directMessage.message || !directMessage.telegramId || sending">
+                Отправить
+            </button>
+        </div>
+
         <!-- Таблица рассылок -->
         <div class="table-container">
             <table>
@@ -608,6 +646,11 @@
                     id: null,
                     filename: ''
                 },
+                directMessage: {
+                    telegramId: '',
+                    message: ''
+                },
+                selectedDmFiles: [],
 
                 async init() {
                     const token = localStorage.getItem('admin_token');
@@ -695,6 +738,82 @@
                 getLibraryFilename(fileId) {
                     const file = this.library.find(f => f.id === fileId);
                     return file ? file.filename : 'Unknown';
+                },
+
+                toggleDmFile(fileId) {
+                    const idx = this.selectedDmFiles.indexOf(fileId);
+                    if (idx === -1) {
+                        this.selectedDmFiles.push(fileId);
+                    } else {
+                        this.selectedDmFiles.splice(idx, 1);
+                    }
+                },
+
+                async sendDirectMessage() {
+                    if (!this.directMessage.message || !this.directMessage.telegramId) {
+                        alert('Введите Telegram ID и текст сообщения');
+                        return;
+                    }
+
+                    const telegramId = parseInt(this.directMessage.telegramId, 10);
+                    if (isNaN(telegramId)) {
+                        alert('Telegram ID должен быть числом');
+                        return;
+                    }
+
+                    this.sending = true;
+                    try {
+                        const token = localStorage.getItem('admin_token');
+
+                        // 1. Создаём уведомление для конкретного пользователя по Telegram ID
+                        const resp = await fetch('/api/admin/notifications', {
+                            method: 'POST',
+                            headers: {
+                                'Authorization': `Bearer ${token}`,
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify({
+                                message: this.directMessage.message,
+                                telegram_ids: [telegramId]
+                            })
+                        });
+
+                        if (!resp.ok) throw new Error('Ошибка создания сообщения');
+
+                        const result = await resp.json();
+                        const notificationId = result.notification.id;
+
+                        // 2. Копируем файлы из библиотеки
+                        for (const fileId of this.selectedDmFiles) {
+                            const file = this.library.find(f => f.id === fileId);
+                            if (file) {
+                                const fileResp = await fetch(`/api/admin/attachments/${fileId}/file`, {
+                                    headers: { 'Authorization': `Bearer ${token}` }
+                                });
+                                const blob = await fileResp.blob();
+                                const formData = new FormData();
+                                formData.append('file', blob, file.filename);
+
+                                await fetch(`/api/admin/notifications/${notificationId}/attachments`, {
+                                    method: 'POST',
+                                    headers: { 'Authorization': `Bearer ${token}` },
+                                    body: formData
+                                });
+                            }
+                        }
+
+                        // 3. Сбрасываем форму
+                        this.directMessage = { telegramId: '', message: '' };
+                        this.selectedDmFiles = [];
+                        await this.loadNotifications();
+
+                        alert('Сообщение отправлено!');
+                    } catch (err) {
+                        console.error('Ошибка:', err);
+                        alert('Ошибка отправки: ' + err.message);
+                    } finally {
+                        this.sending = false;
+                    }
                 },
 
                 openEditModal(file) {

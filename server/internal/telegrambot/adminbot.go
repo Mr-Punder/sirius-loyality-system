@@ -8,8 +8,10 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/MrPunder/sirius-loyality-system/internal/logger"
+	"github.com/MrPunder/sirius-loyality-system/internal/messages"
 	"github.com/MrPunder/sirius-loyality-system/internal/models"
 	"github.com/MrPunder/sirius-loyality-system/internal/storage"
 	tele "gopkg.in/telebot.v3"
@@ -160,7 +162,7 @@ func (ab *AdminBot) Start() error {
 // handleText обрабатывает текстовые сообщения
 func (ab *AdminBot) handleText(c tele.Context) error {
 	if !ab.isAdmin(c.Sender().ID) {
-		return c.Send("У вас нет доступа к этому боту.")
+		return c.Send(messages.AdminNoAccess)
 	}
 
 	text := c.Text()
@@ -169,7 +171,7 @@ func (ab *AdminBot) handleText(c tele.Context) error {
 	state, ok := ab.states[userID]
 	if !ok {
 		keyboard := ab.createMainKeyboard()
-		return c.Send("Используйте кнопки для навигации или /help для просмотра доступных команд.", keyboard)
+		return c.Send(messages.AdminUseButtons, keyboard)
 	}
 
 	switch state.State {
@@ -182,7 +184,7 @@ func (ab *AdminBot) handleText(c tele.Context) error {
 		}
 		// Если пользователь ввел текст вместо файла, напоминаем
 		keyboard := ab.createAttachmentKeyboard()
-		return c.Send("Отправьте фото или документ, или нажмите '✅ Готово' для продолжения.", keyboard)
+		return c.Send(messages.BroadcastSendPhotoOrDone, keyboard)
 
 	case "broadcast_group":
 		if text == "🌐 Все группы" {
@@ -191,13 +193,13 @@ func (ab *AdminBot) handleText(c tele.Context) error {
 			normalizedGroup, _ := NormalizeGroupName(text)
 			return ab.broadcastMessage(c, state.Params["text"], normalizedGroup, state.Attachments)
 		} else {
-			return c.Send("Неверный формат группы. Группа должна быть от Н1 до Н6 (или H1 до H6).")
+			return c.Send(messages.InvalidGroupFormat)
 		}
 
 	case "add_admin_id":
 		_, err := strconv.ParseInt(text, 10, 64)
 		if err != nil {
-			return c.Send("Неверный формат ID пользователя. Пожалуйста, введите целое число.")
+			return c.Send(messages.AdminInvalidUserId)
 		}
 
 		state.Params["admin_id"] = text
@@ -211,7 +213,7 @@ func (ab *AdminBot) handleText(c tele.Context) error {
 			keyboard.Row(btnCancel),
 		)
 
-		return c.Send("Введите имя администратора (для заметок) или нажмите кнопку 'Без имени':", keyboard)
+		return c.Send(messages.AdminEnterUserName, keyboard)
 
 	case "add_admin_name":
 		state.Params["admin_name"] = text
@@ -219,7 +221,7 @@ func (ab *AdminBot) handleText(c tele.Context) error {
 
 	case "user_by_group":
 		if !GroupRegex.MatchString(text) {
-			return c.Send("Неверный формат группы. Группа должна быть от Н1 до Н6 (или H1 до H6).")
+			return c.Send(messages.InvalidGroupFormat)
 		}
 
 		normalizedGroup, _ := NormalizeGroupName(text)
@@ -232,7 +234,7 @@ func (ab *AdminBot) handleText(c tele.Context) error {
 	case "complete_puzzle_id":
 		puzzleId, err := strconv.Atoi(text)
 		if err != nil || puzzleId < 1 || puzzleId > 30 {
-			return c.Send("Неверный номер пазла. Введите число от 1 до 30.")
+			return c.Send(messages.AdminPuzzleInvalidNum)
 		}
 
 		delete(ab.states, userID)
@@ -241,14 +243,14 @@ func (ab *AdminBot) handleText(c tele.Context) error {
 	default:
 		delete(ab.states, userID)
 		keyboard := ab.createMainKeyboard()
-		return c.Send("Используйте кнопки для навигации или /help для просмотра доступных команд.", keyboard)
+		return c.Send(messages.AdminUseButtons, keyboard)
 	}
 }
 
 // handleNoLimitsButton обрабатывает нажатие на кнопку "Без ограничений"
 func (ab *AdminBot) handleNoLimitsButton(c tele.Context) error {
 	if !ab.isAdmin(c.Sender().ID) {
-		return c.Send("У вас нет доступа к этой функции.")
+		return c.Send(messages.AdminNoAccessFunc)
 	}
 
 	userID := c.Sender().ID
@@ -256,7 +258,7 @@ func (ab *AdminBot) handleNoLimitsButton(c tele.Context) error {
 	state, ok := ab.states[userID]
 	if !ok {
 		keyboard := ab.createMainKeyboard()
-		return c.Send("Используйте кнопки для навигации или /help для просмотра доступных команд.", keyboard)
+		return c.Send(messages.AdminUseButtons, keyboard)
 	}
 
 	switch state.State {
@@ -267,14 +269,14 @@ func (ab *AdminBot) handleNoLimitsButton(c tele.Context) error {
 	default:
 		delete(ab.states, userID)
 		keyboard := ab.createMainKeyboard()
-		return c.Send("Используйте кнопки для навигации или /help для просмотра доступных команд.", keyboard)
+		return c.Send(messages.AdminUseButtons, keyboard)
 	}
 }
 
 // handleGroupButton обрабатывает нажатие на кнопку группы
 func (ab *AdminBot) handleGroupButton(c tele.Context) error {
 	if !ab.isAdmin(c.Sender().ID) {
-		return c.Send("У вас нет доступа к этой функции.")
+		return c.Send(messages.AdminNoAccessFunc)
 	}
 
 	userID := c.Sender().ID
@@ -282,13 +284,13 @@ func (ab *AdminBot) handleGroupButton(c tele.Context) error {
 	state, ok := ab.states[userID]
 	if !ok {
 		keyboard := ab.createMainKeyboard()
-		return c.Send("Используйте кнопки для навигации или /help для просмотра доступных команд.", keyboard)
+		return c.Send(messages.AdminUseButtons, keyboard)
 	}
 
 	group := c.Text()
 	normalizedGroup, valid := NormalizeGroupName(group)
 	if !valid {
-		return c.Send("Неверный формат группы. Группа должна быть от Н1 до Н6 (или H1 до H6).")
+		return c.Send(messages.InvalidGroupFormat)
 	}
 
 	switch state.State {
@@ -303,48 +305,48 @@ func (ab *AdminBot) handleGroupButton(c tele.Context) error {
 	default:
 		delete(ab.states, userID)
 		keyboard := ab.createMainKeyboard()
-		return c.Send("Используйте кнопки для навигации или /help для просмотра доступных команд.", keyboard)
+		return c.Send(messages.AdminUseButtons, keyboard)
 	}
 }
 
 // handleCancelButton обрабатывает нажатие на кнопку "Отмена"
 func (ab *AdminBot) handleCancelButton(c tele.Context) error {
 	if !ab.isAdmin(c.Sender().ID) {
-		return c.Send("У вас нет доступа к этой функции.")
+		return c.Send(messages.AdminNoAccessFunc)
 	}
 
 	userID := c.Sender().ID
 	delete(ab.states, userID)
 
 	keyboard := ab.createMainKeyboard()
-	return c.Send("Операция отменена. Выберите действие:", keyboard)
+	return c.Send(messages.AdminCancelled, keyboard)
 }
 
 // addAdminFromParams добавляет администратора из параметров
 func (ab *AdminBot) addAdminFromParams(c tele.Context, params map[string]string) error {
 	adminID, err := strconv.ParseInt(params["admin_id"], 10, 64)
 	if err != nil {
-		return c.Send("Неверный формат ID пользователя.")
+		return c.Send(messages.AdminInvalidUserIdShort)
 	}
 
 	adminName := params["admin_name"]
 
 	// Проверяем, не является ли уже администратором
 	if ab.isAdmin(adminID) {
-		return c.Send(fmt.Sprintf("Пользователь с ID %d уже является администратором.", adminID))
+		return c.Send(messages.AdminAlreadyAdmin(adminID))
 	}
 
 	// Добавляем через API
 	err = ab.addAdminViaAPI(adminID, adminName)
 	if err != nil {
 		ab.logger.Errorf("Ошибка добавления администратора через API: %v", err)
-		return c.Send(fmt.Sprintf("Ошибка добавления администратора: %v", err))
+		return c.Send(messages.AdminAddError(err))
 	}
 
 	delete(ab.states, c.Sender().ID)
 	keyboard := ab.createMainKeyboard()
 
-	return c.Send(fmt.Sprintf("Пользователь с ID %d успешно добавлен в список администраторов.", adminID), keyboard)
+	return c.Send(messages.AdminAddedSuccess(adminID), keyboard)
 }
 
 // handleUsersButton обрабатывает нажатие на кнопку "Пользователи"
@@ -352,11 +354,11 @@ func (ab *AdminBot) handleUsersButton(c tele.Context) error {
 	ab.logger.Infof("Пользователь %d нажал на кнопку 'Пользователи'", c.Sender().ID)
 
 	if !ab.isAdmin(c.Sender().ID) {
-		return c.Send("У вас нет доступа к этой функции.")
+		return c.Send(messages.AdminNoAccessFunc)
 	}
 
 	keyboard := ab.createUsersKeyboard()
-	return c.Send("Выберите действие для работы с пользователями:", keyboard)
+	return c.Send(messages.AdminUsersMenu, keyboard)
 }
 
 // handlePuzzlesButton обрабатывает нажатие на кнопку "Пазлы"
@@ -364,11 +366,11 @@ func (ab *AdminBot) handlePuzzlesButton(c tele.Context) error {
 	ab.logger.Infof("Пользователь %d нажал на кнопку 'Пазлы'", c.Sender().ID)
 
 	if !ab.isAdmin(c.Sender().ID) {
-		return c.Send("У вас нет доступа к этой функции.")
+		return c.Send(messages.AdminNoAccessFunc)
 	}
 
 	keyboard := ab.createPuzzlesKeyboard()
-	return c.Send("Выберите действие для работы с пазлами:", keyboard)
+	return c.Send(messages.AdminPuzzlesMenu, keyboard)
 }
 
 // handleAdminsButton обрабатывает нажатие на кнопку "Администраторы"
@@ -376,11 +378,11 @@ func (ab *AdminBot) handleAdminsButton(c tele.Context) error {
 	ab.logger.Infof("Пользователь %d нажал на кнопку 'Администраторы'", c.Sender().ID)
 
 	if !ab.isAdmin(c.Sender().ID) {
-		return c.Send("У вас нет доступа к этой функции.")
+		return c.Send(messages.AdminNoAccessFunc)
 	}
 
 	keyboard := ab.createAdminsKeyboard()
-	return c.Send("Выберите действие для работы с администраторами:", keyboard)
+	return c.Send(messages.AdminAdminsMenu, keyboard)
 }
 
 // handleAllUsersButton обрабатывает нажатие на кнопку "Все пользователи"
@@ -394,7 +396,7 @@ func (ab *AdminBot) handleUsersByGroupButton(c tele.Context) error {
 	ab.logger.Infof("Пользователь %d нажал на кнопку 'По группам'", c.Sender().ID)
 
 	if !ab.isAdmin(c.Sender().ID) {
-		return c.Send("У вас нет доступа к этой функции.")
+		return c.Send(messages.AdminNoAccessFunc)
 	}
 
 	userID := c.Sender().ID
@@ -417,7 +419,7 @@ func (ab *AdminBot) handleUsersByGroupButton(c tele.Context) error {
 		keyboard.Row(btnCancel),
 	)
 
-	return c.Send("Выберите группу для фильтрации пользователей:", keyboard)
+	return c.Send(messages.AdminSelectGroup, keyboard)
 }
 
 // handleListPuzzlesButton обрабатывает нажатие на кнопку "Список пазлов"
@@ -437,7 +439,7 @@ func (ab *AdminBot) handleCompletePuzzleButton(c tele.Context) error {
 	ab.logger.Infof("Пользователь %d нажал на кнопку 'Засчитать пазл'", c.Sender().ID)
 
 	if !ab.isAdmin(c.Sender().ID) {
-		return c.Send("У вас нет доступа к этой функции.")
+		return c.Send(messages.AdminNoAccessFunc)
 	}
 
 	userID := c.Sender().ID
@@ -450,7 +452,7 @@ func (ab *AdminBot) handleCompletePuzzleButton(c tele.Context) error {
 	btnCancel := keyboard.Text("❌ Отмена")
 	keyboard.Reply(keyboard.Row(btnCancel))
 
-	return c.Send("Введите номер пазла для засчитывания (1-30):", keyboard)
+	return c.Send(messages.AdminPuzzleEnterNum, keyboard)
 }
 
 // handleAddAdminButton обрабатывает нажатие на кнопку "Добавить администратора"
@@ -458,7 +460,7 @@ func (ab *AdminBot) handleAddAdminButton(c tele.Context) error {
 	ab.logger.Infof("Пользователь %d нажал на кнопку 'Добавить администратора'", c.Sender().ID)
 
 	if !ab.isAdmin(c.Sender().ID) {
-		return c.Send("У вас нет доступа к этой функции.")
+		return c.Send(messages.AdminNoAccessFunc)
 	}
 
 	userID := c.Sender().ID
@@ -467,7 +469,7 @@ func (ab *AdminBot) handleAddAdminButton(c tele.Context) error {
 		Params: make(map[string]string),
 	}
 
-	return c.Send("Введите ID пользователя:")
+	return c.Send(messages.AdminEnterUserId)
 }
 
 // handleLotteryButton обрабатывает нажатие на кнопку "Розыгрыш"
@@ -481,11 +483,11 @@ func (ab *AdminBot) handleBackButton(c tele.Context) error {
 	ab.logger.Infof("Пользователь %d нажал на кнопку 'Назад'", c.Sender().ID)
 
 	if !ab.isAdmin(c.Sender().ID) {
-		return c.Send("У вас нет доступа к этой функции.")
+		return c.Send(messages.AdminNoAccessFunc)
 	}
 
 	keyboard := ab.createMainKeyboard()
-	return c.Send("Главное меню:", keyboard)
+	return c.Send(messages.AdminMainMenu, keyboard)
 }
 
 // Stop останавливает бота
@@ -624,11 +626,11 @@ func (ab *AdminBot) handleStart(c tele.Context) error {
 	ab.logger.Infof("Пользователь %d запустил бота", c.Sender().ID)
 
 	if !ab.isAdmin(c.Sender().ID) {
-		return c.Send("У вас нет доступа к этому боту.")
+		return c.Send(messages.AdminNoAccess)
 	}
 
 	keyboard := ab.createMainKeyboard()
-	return c.Send("Привет, администратор! Я бот для управления системой пазлов. Выберите действие на клавиатуре или используйте /help для просмотра доступных команд.", keyboard)
+	return c.Send(messages.AdminWelcome, keyboard)
 }
 
 // handleUsers обрабатывает команду /users
@@ -636,7 +638,7 @@ func (ab *AdminBot) handleUsers(c tele.Context) error {
 	ab.logger.Infof("Пользователь %d запросил список пользователей", c.Sender().ID)
 
 	if !ab.isAdmin(c.Sender().ID) {
-		return c.Send("У вас нет доступа к этой команде.")
+		return c.Send(messages.AdminNoAccessCommand)
 	}
 
 	args := strings.Fields(c.Message().Payload)
@@ -644,7 +646,7 @@ func (ab *AdminBot) handleUsers(c tele.Context) error {
 	if len(args) > 0 {
 		normalizedGroup, valid := NormalizeGroupName(args[0])
 		if !valid {
-			return c.Send("Неверный формат группы. Группа должна быть от Н1 до Н6 (или H1 до H6).")
+			return c.Send(messages.InvalidGroupFormat)
 		}
 		group = normalizedGroup
 		ab.logger.Infof("Фильтрация пользователей по группе: %s", group)
@@ -653,7 +655,7 @@ func (ab *AdminBot) handleUsers(c tele.Context) error {
 	usersData, err := ab.apiClient.Get("/users", nil)
 	if err != nil {
 		ab.logger.Errorf("Ошибка получения пользователей через API: %v", err)
-		return c.Send("Произошла ошибка при получении пользователей. Пожалуйста, попробуйте позже.")
+		return c.Send(messages.AdminErrGetUsers)
 	}
 
 	var usersResponse struct {
@@ -662,7 +664,7 @@ func (ab *AdminBot) handleUsers(c tele.Context) error {
 	}
 	if err := json.Unmarshal(usersData, &usersResponse); err != nil {
 		ab.logger.Errorf("Ошибка декодирования ответа API: %v", err)
-		return c.Send("Произошла ошибка при получении пользователей. Пожалуйста, попробуйте позже.")
+		return c.Send(messages.AdminErrGetUsers)
 	}
 
 	var filteredUsers []*models.User
@@ -674,23 +676,22 @@ func (ab *AdminBot) handleUsers(c tele.Context) error {
 
 	if len(filteredUsers) == 0 {
 		if group == "" {
-			return c.Send("Пользователи не найдены.")
+			return c.Send(messages.AdminUsersNotFound)
 		} else {
-			return c.Send(fmt.Sprintf("Пользователи в группе %s не найдены.", group))
+			return c.Send(messages.AdminUsersNotFoundInGroup(group))
 		}
 	}
 
 	var message strings.Builder
 	if group == "" {
-		message.WriteString("Список всех пользователей:\n\n")
+		message.WriteString(messages.AdminUsersListAll)
 	} else {
-		message.WriteString(fmt.Sprintf("Список пользователей в группе %s:\n\n", group))
+		message.WriteString(messages.AdminUsersListGroupHeader(group))
 	}
 
 	for i, user := range filteredUsers {
 		pieceCount, _ := ab.getUserPieceCount(user.Id.String())
-		message.WriteString(fmt.Sprintf("%d. %s %s (Группа: %s, Деталей: %d)\n",
-			i+1, user.FirstName, user.LastName, user.Group, pieceCount))
+		message.WriteString(messages.AdminUserLine(i+1, user.FirstName, user.LastName, user.Group, pieceCount))
 	}
 
 	return c.Send(message.String())
@@ -701,12 +702,12 @@ func (ab *AdminBot) handleUser(c tele.Context) error {
 	ab.logger.Infof("Пользователь %d запросил информацию о пользователе", c.Sender().ID)
 
 	if !ab.isAdmin(c.Sender().ID) {
-		return c.Send("У вас нет доступа к этой команде.")
+		return c.Send(messages.AdminNoAccessCommand)
 	}
 
 	args := strings.Fields(c.Message().Payload)
 	if len(args) == 0 {
-		return c.Send("Укажите ID пользователя. Например: /user 123e4567-e89b-12d3-a456-426614174000")
+		return c.Send(messages.AdminUserSpecifyId)
 	}
 
 	userID := args[0]
@@ -714,7 +715,7 @@ func (ab *AdminBot) handleUser(c tele.Context) error {
 	userData, err := ab.apiClient.Get("/users/"+userID, nil)
 	if err != nil {
 		ab.logger.Errorf("Ошибка получения пользователя через API: %v", err)
-		return c.Send("Пользователь не найден.")
+		return c.Send(messages.AdminUserNotFound)
 	}
 
 	var userResp struct {
@@ -723,24 +724,16 @@ func (ab *AdminBot) handleUser(c tele.Context) error {
 	}
 	if err := json.Unmarshal(userData, &userResp); err != nil {
 		ab.logger.Errorf("Ошибка декодирования ответа API: %v", err)
-		return c.Send("Произошла ошибка при получении информации о пользователе. Пожалуйста, попробуйте позже.")
+		return c.Send(messages.AdminErrGetUser)
 	}
 
 	if userResp.Deleted {
-		return c.Send("Пользователь удален.")
+		return c.Send(messages.AdminUserDeleted)
 	}
 
-	message := fmt.Sprintf("Информация о пользователе:\n\n"+
-		"ID: %s\n"+
-		"Имя: %s\n"+
-		"Фамилия: %s\n"+
-		"Отчество: %s\n"+
-		"Telegram: %s\n"+
-		"Группа: %s\n"+
-		"Деталей: %d\n"+
-		"Дата регистрации: %s",
-		userResp.Id, userResp.FirstName, userResp.LastName, userResp.MiddleName,
-		userResp.Telegramm, userResp.Group, userResp.PieceCount, userResp.RegistrationTime.Format("02.01.2006 15:04:05"))
+	message := messages.AdminUserInfo(
+		userResp.Id.String(), userResp.FirstName, userResp.LastName, userResp.MiddleName,
+		userResp.Telegramm, userResp.Group, userResp.PieceCount, userResp.RegistrationTime)
 
 	return c.Send(message)
 }
@@ -750,30 +743,39 @@ func (ab *AdminBot) handlePuzzles(c tele.Context) error {
 	ab.logger.Infof("Пользователь %d запросил список пазлов", c.Sender().ID)
 
 	if !ab.isAdmin(c.Sender().ID) {
-		return c.Send("У вас нет доступа к этой команде.")
+		return c.Send(messages.AdminNoAccessCommand)
 	}
 
 	puzzlesData, err := ab.apiClient.Get("/puzzles", nil)
 	if err != nil {
 		ab.logger.Errorf("Ошибка получения пазлов через API: %v", err)
-		return c.Send("Произошла ошибка при получении списка пазлов. Пожалуйста, попробуйте позже.")
+		return c.Send(messages.AdminErrGetPuzzles)
+	}
+
+	type PuzzleWithProgress struct {
+		Id          int        `json:"id"`
+		Name        string     `json:"name"`
+		IsCompleted bool       `json:"is_completed"`
+		CompletedAt *time.Time `json:"completed_at,omitempty"`
+		OwnedPieces int        `json:"owned_pieces"`
+		TotalPieces int        `json:"total_pieces"`
 	}
 
 	var puzzlesResponse struct {
-		Total   int              `json:"total"`
-		Puzzles []*models.Puzzle `json:"puzzles"`
+		Total   int                  `json:"total"`
+		Puzzles []PuzzleWithProgress `json:"puzzles"`
 	}
 	if err := json.Unmarshal(puzzlesData, &puzzlesResponse); err != nil {
 		ab.logger.Errorf("Ошибка декодирования ответа API: %v", err)
-		return c.Send("Произошла ошибка при получении списка пазлов. Пожалуйста, попробуйте позже.")
+		return c.Send(messages.AdminErrGetPuzzles)
 	}
 
 	if len(puzzlesResponse.Puzzles) == 0 {
-		return c.Send("Пазлы не найдены.")
+		return c.Send(messages.AdminPuzzlesNotFound)
 	}
 
 	var message strings.Builder
-	message.WriteString(fmt.Sprintf("Список пазлов (%d):\n\n", len(puzzlesResponse.Puzzles)))
+	message.WriteString(messages.AdminPuzzlesListHeader(len(puzzlesResponse.Puzzles)))
 
 	completedCount := 0
 	for _, puzzle := range puzzlesResponse.Puzzles {
@@ -786,11 +788,11 @@ func (ab *AdminBot) handlePuzzles(c tele.Context) error {
 		if name == "" {
 			name = fmt.Sprintf("Пазл %d", puzzle.Id)
 		}
-		message.WriteString(fmt.Sprintf("#%d %s: %s\n", puzzle.Id, name, status))
+		message.WriteString(messages.AdminPuzzleLine(puzzle.Id, puzzle.OwnedPieces, name, status))
 	}
 
-	message.WriteString(fmt.Sprintf("\nЗасчитано: %d из %d", completedCount, len(puzzlesResponse.Puzzles)))
-	message.WriteString("\n\nДля засчитывания пазла используйте:\n/complete <номер_пазла>")
+	message.WriteString(messages.AdminPuzzlesCompleted(completedCount, len(puzzlesResponse.Puzzles)))
+	message.WriteString(messages.AdminPuzzlesFooter)
 
 	return c.Send(message.String())
 }
@@ -800,17 +802,17 @@ func (ab *AdminBot) handleCompletePuzzle(c tele.Context) error {
 	ab.logger.Infof("Пользователь %d вызвал команду /complete", c.Sender().ID)
 
 	if !ab.isAdmin(c.Sender().ID) {
-		return c.Send("У вас нет доступа к этой команде.")
+		return c.Send(messages.AdminNoAccessCommand)
 	}
 
 	args := strings.Fields(c.Message().Payload)
 	if len(args) == 0 {
-		return c.Send("Укажите номер пазла. Например: /complete 5")
+		return c.Send(messages.AdminPuzzleSpecifyNum)
 	}
 
 	puzzleId, err := strconv.Atoi(args[0])
 	if err != nil || puzzleId < 1 || puzzleId > 30 {
-		return c.Send("Неверный номер пазла. Укажите число от 1 до 30.")
+		return c.Send(messages.AdminPuzzleInvalidNum)
 	}
 
 	return ab.completePuzzleAndNotify(c, puzzleId)
@@ -824,7 +826,7 @@ func (ab *AdminBot) completePuzzleAndNotify(c tele.Context, puzzleId int) error 
 	puzzleData, err := ab.apiClient.Get(fmt.Sprintf("/puzzles/%d", puzzleId), nil)
 	if err != nil {
 		ab.logger.Errorf("Ошибка получения пазла: %v", err)
-		return c.Send("Ошибка: пазл не найден.")
+		return c.Send(messages.AdminPuzzleNotFound)
 	}
 
 	var puzzleInfo struct {
@@ -835,14 +837,14 @@ func (ab *AdminBot) completePuzzleAndNotify(c tele.Context, puzzleId int) error 
 	json.Unmarshal(puzzleData, &puzzleInfo)
 
 	if puzzleInfo.IsCompleted {
-		return c.Send(fmt.Sprintf("Пазл #%d уже был засчитан ранее.", puzzleId))
+		return c.Send(messages.AdminPuzzleAlreadyCompleted(puzzleId))
 	}
 
 	// Засчитываем пазл через API
 	completeData, err := ab.apiClient.Post(fmt.Sprintf("/puzzles/%d/complete", puzzleId), nil)
 	if err != nil {
 		ab.logger.Errorf("Ошибка засчитывания пазла: %v", err)
-		return c.Send(fmt.Sprintf("Ошибка при засчитывании пазла: %v", err))
+		return c.Send(messages.AdminPuzzleCompleteErr(err))
 	}
 
 	var completeResponse struct {
@@ -857,7 +859,7 @@ func (ab *AdminBot) completePuzzleAndNotify(c tele.Context, puzzleId int) error 
 	}
 	if err := json.Unmarshal(completeData, &completeResponse); err != nil {
 		ab.logger.Errorf("Ошибка декодирования ответа: %v", err)
-		return c.Send("Ошибка при обработке ответа сервера.")
+		return c.Send(messages.AdminErrCompletePzl)
 	}
 
 	puzzleName := puzzleInfo.Name
@@ -876,17 +878,11 @@ func (ab *AdminBot) completePuzzleAndNotify(c tele.Context, puzzleId int) error 
 	keyboard := ab.createMainKeyboard()
 
 	if len(userIds) == 0 {
-		resultMsg := fmt.Sprintf("✅ Пазл \"%s\" (#%d) успешно засчитан!\n\n"+
-			"⚠️ Нет пользователей для уведомления.",
-			puzzleName, puzzleId)
-		return c.Send(resultMsg, keyboard)
+		return c.Send(messages.AdminPuzzleCompletedNoUsers(puzzleName, puzzleId), keyboard)
 	}
 
 	// Создаем уведомление через API с конкретными пользователями
-	notificationMsg := fmt.Sprintf("🎉 Поздравляем!\n\n"+
-		"Ваш пазл \"%s\" засчитан!\n"+
-		"Теперь вы участвуете в розыгрыше призов.\n\n"+
-		"Спасибо за участие!", puzzleName)
+	notificationMsg := messages.PuzzleCompletedNotification(puzzleName)
 
 	notificationData := map[string]interface{}{
 		"message":  notificationMsg,
@@ -896,19 +892,10 @@ func (ab *AdminBot) completePuzzleAndNotify(c tele.Context, puzzleId int) error 
 	_, err = ab.apiClient.Post("/notifications", notificationData)
 	if err != nil {
 		ab.logger.Errorf("Ошибка создания уведомления: %v", err)
-		resultMsg := fmt.Sprintf("✅ Пазл \"%s\" (#%d) успешно засчитан!\n\n"+
-			"⚠️ Ошибка создания уведомления: %v\n"+
-			"Участников: %d",
-			puzzleName, puzzleId, err, len(userIds))
-		return c.Send(resultMsg, keyboard)
+		return c.Send(messages.AdminPuzzleCompletedNotifyErr(puzzleName, puzzleId, err, len(userIds)), keyboard)
 	}
 
-	resultMsg := fmt.Sprintf("✅ Пазл \"%s\" (#%d) успешно засчитан!\n\n"+
-		"📨 Уведомление создано для %d участников.\n"+
-		"Сообщения будут отправлены автоматически.",
-		puzzleName, puzzleId, len(userIds))
-
-	return c.Send(resultMsg, keyboard)
+	return c.Send(messages.AdminPuzzleCompletedSuccess(puzzleName, puzzleId, len(userIds)), keyboard)
 }
 
 // handlePiecesCommand обрабатывает команду /pieces
@@ -916,13 +903,13 @@ func (ab *AdminBot) handlePiecesCommand(c tele.Context) error {
 	ab.logger.Infof("Пользователь %d запросил список деталей", c.Sender().ID)
 
 	if !ab.isAdmin(c.Sender().ID) {
-		return c.Send("У вас нет доступа к этой команде.")
+		return c.Send(messages.AdminNoAccessCommand)
 	}
 
 	piecesData, err := ab.apiClient.Get("/pieces", nil)
 	if err != nil {
 		ab.logger.Errorf("Ошибка получения деталей через API: %v", err)
-		return c.Send("Произошла ошибка при получении списка деталей. Пожалуйста, попробуйте позже.")
+		return c.Send(messages.AdminErrGetPieces)
 	}
 
 	var piecesResponse struct {
@@ -931,11 +918,11 @@ func (ab *AdminBot) handlePiecesCommand(c tele.Context) error {
 	}
 	if err := json.Unmarshal(piecesData, &piecesResponse); err != nil {
 		ab.logger.Errorf("Ошибка декодирования ответа API: %v", err)
-		return c.Send("Произошла ошибка при получении списка деталей. Пожалуйста, попробуйте позже.")
+		return c.Send(messages.AdminErrGetPieces)
 	}
 
 	if piecesResponse.Total == 0 {
-		return c.Send("Детали не найдены. Используйте веб-интерфейс для импорта деталей.")
+		return c.Send(messages.AdminPiecesNotFound)
 	}
 
 	// Считаем статистику
@@ -946,14 +933,7 @@ func (ab *AdminBot) handlePiecesCommand(c tele.Context) error {
 		}
 	}
 
-	message := fmt.Sprintf("Статистика деталей:\n\n"+
-		"Всего деталей: %d\n"+
-		"Зарегистрировано: %d\n"+
-		"Свободно: %d\n\n"+
-		"Для детального просмотра используйте веб-интерфейс.",
-		piecesResponse.Total, registeredCount, piecesResponse.Total-registeredCount)
-
-	return c.Send(message)
+	return c.Send(messages.AdminPiecesStats(piecesResponse.Total, registeredCount, piecesResponse.Total-registeredCount))
 }
 
 // handleLottery обрабатывает команду /lottery
@@ -961,13 +941,13 @@ func (ab *AdminBot) handleLottery(c tele.Context) error {
 	ab.logger.Infof("Пользователь %d запросил статистику розыгрыша", c.Sender().ID)
 
 	if !ab.isAdmin(c.Sender().ID) {
-		return c.Send("У вас нет доступа к этой команде.")
+		return c.Send(messages.AdminNoAccessCommand)
 	}
 
 	lotteryData, err := ab.apiClient.Get("/stats/lottery", nil)
 	if err != nil {
 		ab.logger.Errorf("Ошибка получения статистики розыгрыша через API: %v", err)
-		return c.Send("Произошла ошибка при получении статистики. Пожалуйста, попробуйте позже.")
+		return c.Send(messages.AdminErrGetLottery)
 	}
 
 	var lotteryResponse struct {
@@ -984,21 +964,18 @@ func (ab *AdminBot) handleLottery(c tele.Context) error {
 	}
 	if err := json.Unmarshal(lotteryData, &lotteryResponse); err != nil {
 		ab.logger.Errorf("Ошибка декодирования ответа API: %v", err)
-		return c.Send("Произошла ошибка при получении статистики. Пожалуйста, попробуйте позже.")
+		return c.Send(messages.AdminErrGetLottery)
 	}
 
 	var message strings.Builder
-	message.WriteString("📊 Статистика розыгрыша\n\n")
-	message.WriteString(fmt.Sprintf("Всего пользователей: %d\n", lotteryResponse.TotalUsers))
-	message.WriteString(fmt.Sprintf("Всего пазлов: %d\n", lotteryResponse.TotalPuzzles))
-	message.WriteString(fmt.Sprintf("Собрано пазлов: %d\n\n", lotteryResponse.CompletedPuzzles))
+	message.WriteString(messages.AdminLotteryHeader)
+	message.WriteString(messages.AdminLotteryStats(lotteryResponse.TotalUsers, lotteryResponse.TotalPuzzles, lotteryResponse.CompletedPuzzles))
 
 	if len(lotteryResponse.Users) > 0 {
-		message.WriteString("Пользователи с деталями собранных пазлов:\n\n")
+		message.WriteString(messages.AdminLotteryUsersHeader)
 		for i, user := range lotteryResponse.Users {
 			if user.CompletedPieces > 0 {
-				message.WriteString(fmt.Sprintf("%d. %s %s (%s) - %d деталей в собранных пазлах\n",
-					i+1, user.FirstName, user.LastName, user.Group, user.CompletedPieces))
+				message.WriteString(messages.AdminLotteryUserLine(i+1, user.FirstName, user.LastName, user.Group, user.CompletedPieces))
 			}
 		}
 	}
@@ -1011,17 +988,17 @@ func (ab *AdminBot) handleAddAdmin(c tele.Context) error {
 	ab.logger.Infof("Пользователь %d запросил добавление администратора", c.Sender().ID)
 
 	if !ab.isAdmin(c.Sender().ID) {
-		return c.Send("У вас нет доступа к этой команде.")
+		return c.Send(messages.AdminNoAccessCommand)
 	}
 
 	args := strings.Fields(c.Message().Payload)
 	if len(args) == 0 {
-		return c.Send("Укажите ID пользователя. Например: /addadmin 123456789")
+		return c.Send(messages.AdminSpecifyUserId)
 	}
 
 	adminID, err := strconv.ParseInt(args[0], 10, 64)
 	if err != nil {
-		return c.Send("Неверный формат ID пользователя. Используйте целое число.")
+		return c.Send(messages.AdminInvalidUserIdUse)
 	}
 
 	var adminName string
@@ -1031,17 +1008,17 @@ func (ab *AdminBot) handleAddAdmin(c tele.Context) error {
 
 	// Проверяем, не является ли уже администратором
 	if ab.isAdmin(adminID) {
-		return c.Send(fmt.Sprintf("Пользователь с ID %d уже является администратором.", adminID))
+		return c.Send(messages.AdminAlreadyAdmin(adminID))
 	}
 
 	// Добавляем через API
 	err = ab.addAdminViaAPI(adminID, adminName)
 	if err != nil {
 		ab.logger.Errorf("Ошибка добавления администратора через API: %v", err)
-		return c.Send(fmt.Sprintf("Ошибка добавления администратора: %v", err))
+		return c.Send(messages.AdminAddError(err))
 	}
 
-	return c.Send(fmt.Sprintf("Пользователь с ID %d успешно добавлен в список администраторов.", adminID))
+	return c.Send(messages.AdminAddedSuccess(adminID))
 }
 
 // handleListAdmins обрабатывает команду /listadmins
@@ -1049,28 +1026,24 @@ func (ab *AdminBot) handleListAdmins(c tele.Context) error {
 	ab.logger.Infof("Пользователь %d запросил список администраторов", c.Sender().ID)
 
 	if !ab.isAdmin(c.Sender().ID) {
-		return c.Send("У вас нет доступа к этой команде.")
+		return c.Send(messages.AdminNoAccessCommand)
 	}
 
 	admins, err := ab.getAdminsViaAPI()
 	if err != nil {
 		ab.logger.Errorf("Ошибка получения списка администраторов: %v", err)
-		return c.Send("Ошибка получения списка администраторов.")
+		return c.Send(messages.AdminErrGetAdmins)
 	}
 
 	if len(admins) == 0 {
-		return c.Send("Список администраторов пуст.")
+		return c.Send(messages.AdminListEmpty)
 	}
 
 	var message strings.Builder
-	message.WriteString("Список администраторов:\n\n")
+	message.WriteString(messages.AdminListHeader)
 
 	for i, admin := range admins {
-		if admin.Name != "" {
-			message.WriteString(fmt.Sprintf("%d. %d (%s)\n", i+1, admin.ID, admin.Name))
-		} else {
-			message.WriteString(fmt.Sprintf("%d. %d\n", i+1, admin.ID))
-		}
+		message.WriteString(messages.AdminListLine(i+1, admin.ID, admin.Name))
 	}
 
 	return c.Send(message.String())
@@ -1081,7 +1054,7 @@ func (ab *AdminBot) handleBroadcastButton(c tele.Context) error {
 	ab.logger.Infof("Пользователь %d нажал на кнопку 'Рассылка'", c.Sender().ID)
 
 	if !ab.isAdmin(c.Sender().ID) {
-		return c.Send("У вас нет доступа к этой функции.")
+		return c.Send(messages.AdminNoAccessFunc)
 	}
 
 	keyboard := ab.createBroadcastKeyboard()
@@ -1092,7 +1065,7 @@ func (ab *AdminBot) handleBroadcastButton(c tele.Context) error {
 		Params: make(map[string]string),
 	}
 
-	return c.Send("Введите текст сообщения для рассылки всем пользователям:", keyboard)
+	return c.Send(messages.BroadcastEnterText, keyboard)
 }
 
 // createBroadcastKeyboard создает клавиатуру для рассылки
@@ -1118,7 +1091,7 @@ func (ab *AdminBot) handleBroadcastText(c tele.Context, state *BotState) error {
 	state.Attachments = nil // Очищаем предыдущие вложения
 
 	keyboard := ab.createAttachmentKeyboard()
-	return c.Send("Текст сохранён. Теперь вы можете:\n• Отправить фото или документ для добавления\n• Нажать '✅ Готово' для выбора группы", keyboard)
+	return c.Send(messages.BroadcastTextSaved, keyboard)
 }
 
 // createAttachmentKeyboard создает клавиатуру для добавления вложений
@@ -1153,13 +1126,7 @@ func (ab *AdminBot) handleBroadcastAttachmentsDone(c tele.Context, state *BotSta
 		keyboard.Row(btnCancel),
 	)
 
-	attachCount := len(state.Attachments)
-	msg := "Выберите группу для рассылки или нажмите кнопку 'Все группы':"
-	if attachCount > 0 {
-		msg = fmt.Sprintf("Добавлено файлов: %d\n\n%s", attachCount, msg)
-	}
-
-	return c.Send(msg, keyboard)
+	return c.Send(messages.BroadcastSelectGroupWithAttach(len(state.Attachments)), keyboard)
 }
 
 // broadcastMessage создает уведомление для рассылки через очередь
@@ -1175,7 +1142,7 @@ func (ab *AdminBot) broadcastMessage(c tele.Context, text string, group string, 
 		ab.logger.Errorf("Ошибка создания уведомления: %v", err)
 		delete(ab.states, c.Sender().ID)
 		keyboard := ab.createMainKeyboard()
-		return c.Send("Ошибка при создании рассылки. Попробуйте позже.", keyboard)
+		return c.Send(messages.BroadcastErrCreate, keyboard)
 	}
 
 	var response struct {
@@ -1203,23 +1170,13 @@ func (ab *AdminBot) broadcastMessage(c tele.Context, text string, group string, 
 	delete(ab.states, c.Sender().ID)
 	keyboard := ab.createMainKeyboard()
 
-	groupText := "всем пользователям"
-	if group != "" {
-		groupText = fmt.Sprintf("группе %s", group)
-	}
-
-	attachText := ""
-	if uploadedCount > 0 {
-		attachText = fmt.Sprintf("\nФайлов: %d", uploadedCount)
-	}
-
-	return c.Send(fmt.Sprintf("✅ Рассылка создана!%s\n\nСообщение будет отправлено %s в ближайшее время.", attachText, groupText), keyboard)
+	return c.Send(messages.BroadcastCreated(uploadedCount, group), keyboard)
 }
 
 // handleAllGroupsButton обрабатывает нажатие на кнопку "Все группы"
 func (ab *AdminBot) handleAllGroupsButton(c tele.Context) error {
 	if !ab.isAdmin(c.Sender().ID) {
-		return c.Send("У вас нет доступа к этой функции.")
+		return c.Send(messages.AdminNoAccessFunc)
 	}
 
 	userID := c.Sender().ID
@@ -1227,7 +1184,7 @@ func (ab *AdminBot) handleAllGroupsButton(c tele.Context) error {
 	state, ok := ab.states[userID]
 	if !ok || state.State != "broadcast_group" {
 		keyboard := ab.createMainKeyboard()
-		return c.Send("Используйте кнопки для навигации или /help для просмотра доступных команд.", keyboard)
+		return c.Send(messages.AdminUseButtons, keyboard)
 	}
 
 	return ab.broadcastMessage(c, state.Params["text"], "", state.Attachments)
@@ -1265,7 +1222,7 @@ func (ab *AdminBot) handleBroadcastPhoto(c tele.Context) error {
 	reader, err := ab.bot.File(&photo.File)
 	if err != nil {
 		ab.logger.Errorf("Ошибка получения файла: %v", err)
-		return c.Send("Ошибка при загрузке фото. Попробуйте снова.")
+		return c.Send(messages.BroadcastErrPhoto)
 	}
 
 	// Сохраняем во временный файл
@@ -1278,7 +1235,7 @@ func (ab *AdminBot) handleBroadcastPhoto(c tele.Context) error {
 	tempFile, err := os.Create(tempPath)
 	if err != nil {
 		ab.logger.Errorf("Ошибка создания временного файла: %v", err)
-		return c.Send("Ошибка при сохранении фото. Попробуйте снова.")
+		return c.Send(messages.BroadcastErrSavePhoto)
 	}
 
 	_, err = io.Copy(tempFile, reader)
@@ -1286,13 +1243,13 @@ func (ab *AdminBot) handleBroadcastPhoto(c tele.Context) error {
 	if err != nil {
 		ab.logger.Errorf("Ошибка записи файла: %v", err)
 		os.Remove(tempPath)
-		return c.Send("Ошибка при сохранении фото. Попробуйте снова.")
+		return c.Send(messages.BroadcastErrSavePhoto)
 	}
 
 	state.Attachments = append(state.Attachments, tempPath)
 
 	keyboard := ab.createAttachmentKeyboard()
-	return c.Send(fmt.Sprintf("📷 Фото добавлено! Всего файлов: %d\n\nДобавьте ещё или нажмите '✅ Готово'", len(state.Attachments)), keyboard)
+	return c.Send(messages.BroadcastPhotoAdded(len(state.Attachments)), keyboard)
 }
 
 // handleBroadcastDocument обрабатывает документ для рассылки
@@ -1316,7 +1273,7 @@ func (ab *AdminBot) handleBroadcastDocument(c tele.Context) error {
 	reader, err := ab.bot.File(&doc.File)
 	if err != nil {
 		ab.logger.Errorf("Ошибка получения файла: %v", err)
-		return c.Send("Ошибка при загрузке документа. Попробуйте снова.")
+		return c.Send(messages.BroadcastErrDoc)
 	}
 
 	// Сохраняем во временный файл
@@ -1329,7 +1286,7 @@ func (ab *AdminBot) handleBroadcastDocument(c tele.Context) error {
 	tempFile, err := os.Create(tempPath)
 	if err != nil {
 		ab.logger.Errorf("Ошибка создания временного файла: %v", err)
-		return c.Send("Ошибка при сохранении документа. Попробуйте снова.")
+		return c.Send(messages.BroadcastErrSaveDoc)
 	}
 
 	_, err = io.Copy(tempFile, reader)
@@ -1337,13 +1294,13 @@ func (ab *AdminBot) handleBroadcastDocument(c tele.Context) error {
 	if err != nil {
 		ab.logger.Errorf("Ошибка записи файла: %v", err)
 		os.Remove(tempPath)
-		return c.Send("Ошибка при сохранении документа. Попробуйте снова.")
+		return c.Send(messages.BroadcastErrSaveDoc)
 	}
 
 	state.Attachments = append(state.Attachments, tempPath)
 
 	keyboard := ab.createAttachmentKeyboard()
-	return c.Send(fmt.Sprintf("📎 Документ '%s' добавлен! Всего файлов: %d\n\nДобавьте ещё или нажмите '✅ Готово'", doc.FileName, len(state.Attachments)), keyboard)
+	return c.Send(messages.BroadcastDocAdded(doc.FileName, len(state.Attachments)), keyboard)
 }
 
 // handleHelp обрабатывает команду /help
@@ -1351,21 +1308,10 @@ func (ab *AdminBot) handleHelp(c tele.Context) error {
 	ab.logger.Infof("Пользователь %d запросил справку", c.Sender().ID)
 
 	if !ab.isAdmin(c.Sender().ID) {
-		return c.Send("У вас нет доступа к этому боту.")
+		return c.Send(messages.AdminNoAccess)
 	}
 
-	message := "Доступные команды:\n\n" +
-		"/users [группа] - Список пользователей (опционально фильтр по группе)\n" +
-		"/user <ID> - Информация о пользователе\n" +
-		"/puzzles - Список пазлов\n" +
-		"/pieces - Статистика деталей\n" +
-		"/complete <номер> - Засчитать пазл и уведомить участников\n" +
-		"/lottery - Статистика для розыгрыша\n" +
-		"/addadmin <ID> - Добавить администратора\n" +
-		"/listadmins - Список администраторов\n" +
-		"/help - Показать эту справку"
-
-	return c.Send(message)
+	return c.Send(messages.AdminHelpMessage)
 }
 
 // showUsersByGroup показывает пользователей выбранной группы
@@ -1373,7 +1319,7 @@ func (ab *AdminBot) showUsersByGroup(c tele.Context, group string) error {
 	usersData, err := ab.apiClient.Get("/users", nil)
 	if err != nil {
 		ab.logger.Errorf("Ошибка получения пользователей через API: %v", err)
-		return c.Send("Произошла ошибка при получении пользователей. Пожалуйста, попробуйте позже.")
+		return c.Send(messages.AdminErrGetUsers)
 	}
 
 	var usersResponse struct {
@@ -1382,7 +1328,7 @@ func (ab *AdminBot) showUsersByGroup(c tele.Context, group string) error {
 	}
 	if err := json.Unmarshal(usersData, &usersResponse); err != nil {
 		ab.logger.Errorf("Ошибка декодирования ответа API: %v", err)
-		return c.Send("Произошла ошибка при получении пользователей. Пожалуйста, попробуйте позже.")
+		return c.Send(messages.AdminErrGetUsers)
 	}
 
 	var filteredUsers []*models.User
@@ -1393,16 +1339,15 @@ func (ab *AdminBot) showUsersByGroup(c tele.Context, group string) error {
 	}
 
 	if len(filteredUsers) == 0 {
-		return c.Send(fmt.Sprintf("Пользователи в группе %s не найдены.", group))
+		return c.Send(messages.AdminUsersNotFoundInGroup(group))
 	}
 
 	var message strings.Builder
-	message.WriteString(fmt.Sprintf("Список пользователей в группе %s:\n\n", group))
+	message.WriteString(messages.AdminUsersListGroupHeader(group))
 
 	for i, user := range filteredUsers {
 		pieceCount, _ := ab.getUserPieceCount(user.Id.String())
-		message.WriteString(fmt.Sprintf("%d. %s %s (Деталей: %d)\n",
-			i+1, user.FirstName, user.LastName, pieceCount))
+		message.WriteString(messages.AdminUserLineShort(i+1, user.FirstName, user.LastName, pieceCount))
 	}
 
 	return c.Send(message.String())

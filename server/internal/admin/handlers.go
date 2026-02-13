@@ -66,8 +66,10 @@ type UsersResponse struct {
 type PieceResponse struct {
 	Code         string     `json:"code"`
 	PuzzleId     int        `json:"puzzle_id"`
+	PuzzleName   string     `json:"puzzle_name"`
 	PieceNumber  int        `json:"piece_number"`
 	OwnerId      *uuid.UUID `json:"owner_id,omitempty"`
+	OwnerName    string     `json:"owner_name,omitempty"`
 	RegisteredAt *time.Time `json:"registered_at,omitempty"`
 }
 
@@ -630,6 +632,34 @@ func (ah *AdminHandler) handlePieces(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Получаем все пазлы для маппинга id -> name
+	puzzles, err := ah.store.GetAllPuzzles()
+	if err != nil {
+		ah.logger.Errorf("Ошибка получения пазлов: %v", err)
+		http.Error(w, "Внутренняя ошибка сервера", http.StatusInternalServerError)
+		return
+	}
+	puzzleNames := make(map[int]string)
+	for _, p := range puzzles {
+		puzzleNames[p.Id] = p.Name
+	}
+
+	// Получаем всех пользователей для маппинга id -> name
+	users, err := ah.store.GetAllUsers()
+	if err != nil {
+		ah.logger.Errorf("Ошибка получения пользователей: %v", err)
+		http.Error(w, "Внутренняя ошибка сервера", http.StatusInternalServerError)
+		return
+	}
+	userNames := make(map[uuid.UUID]string)
+	for _, u := range users {
+		name := u.LastName + " " + u.FirstName
+		if u.MiddleName != "" {
+			name += " " + u.MiddleName
+		}
+		userNames[u.Id] = name
+	}
+
 	// Фильтруем детали
 	var filteredPieces []*models.PuzzlePiece
 	for _, piece := range pieces {
@@ -658,23 +688,28 @@ func (ah *AdminHandler) handlePieces(w http.ResponseWriter, r *http.Request) {
 	// Преобразуем детали в ответ
 	var pieceResponses []PieceResponse
 	for _, piece := range filteredPieces {
-		pieceResponses = append(pieceResponses, PieceResponse{
+		resp := PieceResponse{
 			Code:         piece.Code,
 			PuzzleId:     piece.PuzzleId,
+			PuzzleName:   puzzleNames[piece.PuzzleId],
 			PieceNumber:  piece.PieceNumber,
 			OwnerId:      piece.OwnerId,
 			RegisteredAt: piece.RegisteredAt,
-		})
+		}
+		if piece.OwnerId != nil {
+			resp.OwnerName = userNames[*piece.OwnerId]
+		}
+		pieceResponses = append(pieceResponses, resp)
 	}
 
 	// Отправляем ответ
-	resp := PiecesResponse{
+	response := PiecesResponse{
 		Total:  len(pieceResponses),
 		Pieces: pieceResponses,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	json.NewEncoder(w).Encode(response)
 }
 
 // handleAddPieces обрабатывает запрос на добавление деталей пазлов
@@ -941,9 +976,10 @@ func (ah *AdminHandler) handleCreateNotification(w http.ResponseWriter, r *http.
 	ah.logger.Info("Запрос на создание рассылки")
 
 	var request struct {
-		Message string   `json:"message"`
-		Group   string   `json:"group"`
-		UserIds []string `json:"user_ids,omitempty"`
+		Message     string   `json:"message"`
+		Group       string   `json:"group"`
+		UserIds     []string `json:"user_ids,omitempty"`      // UUID пользователей
+		TelegramIds []int64  `json:"telegram_ids,omitempty"`  // Telegram ID пользователей
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
@@ -962,6 +998,36 @@ func (ah *AdminHandler) handleCreateNotification(w http.ResponseWriter, r *http.
 	for _, idStr := range request.UserIds {
 		if id, err := uuid.Parse(idStr); err == nil {
 			userIds = append(userIds, id)
+		}
+	}
+
+	// Конвертируем telegram_ids в UUID пользователей
+	if len(request.TelegramIds) > 0 {
+		users, err := ah.store.GetAllUsers()
+		if err != nil {
+			ah.logger.Errorf("Ошибка получения пользователей: %v", err)
+			http.Error(w, "Внутренняя ошибка сервера", http.StatusInternalServerError)
+			return
+		}
+
+		// Создаём карту Telegram ID -> UUID
+		telegramToUUID := make(map[int64]uuid.UUID)
+		for _, user := range users {
+			if user.Telegramm != "" {
+				tgId, err := strconv.ParseInt(user.Telegramm, 10, 64)
+				if err == nil {
+					telegramToUUID[tgId] = user.Id
+				}
+			}
+		}
+
+		// Ищем пользователей по Telegram ID
+		for _, tgId := range request.TelegramIds {
+			if userId, found := telegramToUUID[tgId]; found {
+				userIds = append(userIds, userId)
+			} else {
+				ah.logger.Infof("Пользователь с Telegram ID %d не найден", tgId)
+			}
 		}
 	}
 

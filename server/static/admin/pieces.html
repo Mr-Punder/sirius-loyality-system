@@ -52,8 +52,8 @@
                 <label for="puzzle-filter">Пазл</label>
                 <select id="puzzle-filter" x-model="filters.puzzleId" @change="applyFilters">
                     <option value="">Все пазлы</option>
-                    <template x-for="i in 30" :key="i">
-                        <option :value="i" x-text="'Пазл ' + i"></option>
+                    <template x-for="p in puzzlesList" :key="p.id">
+                        <option :value="p.id" x-text="(p.name || 'Пазл ' + p.id) + ' (#' + p.id + ')'"></option>
                     </template>
                 </select>
             </div>
@@ -81,7 +81,7 @@
                         <th class="sortable" :class="getSortClass('code')" @click="sortBy('code')">Код</th>
                         <th class="sortable" :class="getSortClass('puzzle_id')" @click="sortBy('puzzle_id')">Пазл</th>
                         <th class="sortable" :class="getSortClass('piece_number')" @click="sortBy('piece_number')">Деталь №</th>
-                        <th class="sortable" :class="getSortClass('owner_id')" @click="sortBy('owner_id')">Владелец</th>
+                        <th class="sortable" :class="getSortClass('owner_name')" @click="sortBy('owner_name')">Владелец</th>
                         <th class="sortable" :class="getSortClass('registered_at')" @click="sortBy('registered_at')">Дата регистрации</th>
                     </tr>
                 </thead>
@@ -99,9 +99,22 @@
                     <template x-for="piece in filteredPieces" :key="piece.code">
                         <tr :class="{ 'registered': piece.owner_id }">
                             <td><code x-text="piece.code"></code></td>
-                            <td x-text="piece.puzzle_id"></td>
+                            <td>
+                                <span x-text="piece.puzzle_name || ('Пазл ' + piece.puzzle_id)"></span>
+                                <span class="text-muted" x-text="'#' + piece.puzzle_id"></span>
+                            </td>
                             <td x-text="piece.piece_number"></td>
-                            <td x-text="piece.owner_id ? piece.owner_id.substring(0, 8) + '...' : '-'"></td>
+                            <td>
+                                <template x-if="piece.owner_id">
+                                    <div>
+                                        <span x-text="piece.owner_name || 'Неизвестно'"></span>
+                                        <div class="text-muted text-small" x-text="piece.owner_id.substring(0, 8) + '...'"></div>
+                                    </div>
+                                </template>
+                                <template x-if="!piece.owner_id">
+                                    <span>-</span>
+                                </template>
+                            </td>
                             <td x-text="piece.registered_at ? formatDate(piece.registered_at) : '-'"></td>
                         </tr>
                     </template>
@@ -148,6 +161,7 @@
         function piecesApp() {
             return {
                 pieces: [],
+                puzzlesList: [],
                 loading: true,
                 error: null,
                 filters: {
@@ -177,7 +191,25 @@
                         this.filters.puzzleId = puzzleId;
                     }
 
+                    this.fetchPuzzlesList();
                     this.fetchPieces();
+                },
+
+                fetchPuzzlesList() {
+                    const token = localStorage.getItem('admin_token');
+
+                    fetch('/api/admin/puzzles', {
+                        headers: {
+                            'Authorization': `Bearer ${token}`
+                        }
+                    })
+                    .then(response => response.json())
+                    .then(data => {
+                        this.puzzlesList = data.puzzles || [];
+                    })
+                    .catch(error => {
+                        console.error('Ошибка загрузки списка пазлов:', error);
+                    });
                 },
 
                 checkAuth() {
@@ -337,6 +369,9 @@
                         if (field === 'registered_at') {
                             valueA = valueA ? new Date(valueA) : new Date(0);
                             valueB = valueB ? new Date(valueB) : new Date(0);
+                        } else if (field === 'owner_name') {
+                            valueA = (valueA || '').toLowerCase();
+                            valueB = (valueB || '').toLowerCase();
                         } else if (typeof valueA === 'string') {
                             valueA = valueA ? valueA.toLowerCase() : '';
                             valueB = valueB ? valueB.toLowerCase() : '';
@@ -558,6 +593,14 @@
             background: #d4edda;
             border-radius: 4px;
             margin-top: 0.5rem;
+        }
+
+        .text-muted {
+            color: #6c757d;
+        }
+
+        .text-small {
+            font-size: 0.75rem;
         }
     </style>
 </body>
